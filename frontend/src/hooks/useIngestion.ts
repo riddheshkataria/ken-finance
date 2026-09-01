@@ -14,6 +14,9 @@ import type { IngestionEvent } from '../ingestion/types';
 import {
   addIngestionListener,
   drainInbox,
+  drainSkips,
+  drainVoiceNotes,
+  updateWidget,
   hasNotificationAccess,
   hasSmsPermission,
   isNativeIngestionAvailable,
@@ -86,14 +89,58 @@ export function useIngestion(): UseIngestionResult {
     return outcome;
   }, []);
 
-  /** Drains everything the native side captured while JS was not running. */
+  /** Keeps the widget showing the real queue head and backlog count. */
+  const pushQueueToWidget = useCallback(async () => {
+    if (!available) return;
+
+    const store = useTransactionStore.getState();
+    const queue = store.getQueue();
+    const head = queue[0] ?? null;
+
+    await updateWidget({
+      transactionId: head?.id ?? null,
+      amountMinor: head?.amountMinor ?? null,
+      merchant: head?.paidTo ?? null,
+      pendingCount: queue.length,
+    });
+  }, [available]);
+
+  /**
+   * Drains everything the native side captured while JS was not running, in
+   * dependency order: payments first, then the notes and skips that refer to
+   * them, then push the resulting queue head back to the widget.
+   */
   const drain = useCallback(async () => {
     if (!available) return;
+
     const pending = await drainInbox();
     for (const nativeEvent of pending) {
       setLastOutcome(ingestRef.current(toIngestionEvent(nativeEvent)));
     }
-  }, [available]);
+
+    const store = useTransactionStore.getState();
+
+    // A note captured with no transaction id was recorded from the widget
+    // against whatever was at the head of the queue at that moment.
+    for (const note of await drainVoiceNotes()) {
+      const target = store.getCaptureTarget(note.transactionId ?? undefined);
+      if (!target) continue;
+      store.attachNote(target.id, {
+        text: note.transcript,
+        transcript: note.transcript,
+        audioPath: note.audioPath,
+      });
+    }
+
+    for (const skippedId of await drainSkips()) {
+      store.skipInQueue(skippedId);
+    }
+
+    // Items nobody is going to answer stop being offered on the widget.
+    store.retireStaleQueueItems();
+
+    await pushQueueToWidget();
+  }, [available, pushQueueToWidget]);
 
   useEffect(() => {
     if (Platform.OS !== 'android') {
@@ -106,9 +153,12 @@ export function useIngestion(): UseIngestionResult {
 
     const subscription = addIngestionListener((event: NativeIngestionEvent) => {
       setLastOutcome(ingestRef.current(toIngestionEvent(event)));
+      // The widget must reflect the new queue head immediately, not on the
+      // next foreground — this is the whole point of capturing at payment.
+      void pushQueueToWidget();
     });
 
-    // Anything captured while the app was backgrounded is waiting in Room.
+    // Anything captured while the app was backgrounded is in the native buffer.
     const appStateSubscription = AppState.addEventListener('change', (status) => {
       if (status === 'active') {
         void drain();
@@ -120,7 +170,7 @@ export function useIngestion(): UseIngestionResult {
       subscription.remove();
       appStateSubscription.remove();
     };
-  }, [drain, refreshPermissions]);
+  }, [drain, pushQueueToWidget, refreshPermissions]);
 
   return {
     available,

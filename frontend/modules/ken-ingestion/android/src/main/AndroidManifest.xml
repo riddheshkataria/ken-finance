@@ -1,0 +1,73 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+      Dual-channel ingestion.
+
+      SMS permissions are restricted on Google Play: the permitted-use list
+      covers UPI transaction *verification*, not expense tracking, and
+      trackers get rejected on that line. The notification listener below is
+      the path that survives review, and it also sees UPI app payments with
+      cleaner merchant names. Both run; dedupe collapses the overlap.
+    -->
+    <uses-permission android:name="android.permission.RECEIVE_SMS" />
+    <uses-permission android:name="android.permission.READ_SMS" />
+
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <application>
+
+        <!--
+          Static registration so a payment is captured even if the app has
+          never been opened since boot.
+        -->
+        <receiver
+            android:name=".SmsReceiver"
+            android:enabled="true"
+            android:exported="true"
+            android:permission="android.permission.BROADCAST_SMS">
+            <intent-filter android:priority="999">
+                <action android:name="android.provider.Telephony.SMS_RECEIVED" />
+            </intent-filter>
+        </receiver>
+
+        <service
+            android:name=".PaymentNotificationListener"
+            android:exported="false"
+            android:label="@string/ken_listener_label"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
+        <receiver
+            android:name=".KenWidgetProvider"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="expo.modules.keningestion.WIDGET_SKIP" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/ken_widget_info" />
+        </receiver>
+
+        <!--
+          Translucent so the capture sheet floats over whatever the user was
+          doing. showWhenLocked matters: payments happen at counters with the
+          phone just unlocked, and a lock screen must not swallow the prompt.
+        -->
+        <activity
+            android:name=".VoiceCaptureActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTop"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:theme="@style/KenTranslucentTheme" />
+
+    </application>
+
+</manifest>

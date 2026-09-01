@@ -1,17 +1,20 @@
 # Ken Finance — Project Context & Architecture
 
-> **Purpose**: This document serves as the comprehensive context guide for developers and AI coding agents working on **Ken Finance**. It documents the product vision, architecture, current implementation, data models, and guidelines for future development.
+> **Purpose**: Current implementation state for developers and AI coding agents working on **Ken Finance**.
+>
+> **Reading order for a new agent:** `rules.md` (binding conventions) → `plan.md` (architecture and roadmap) → this file.
 
 ---
 
 ## 1. Product Vision & Problem Statement
 
-**The Problem**: Traditional expense trackers in India (and globally) show *that* money was spent (e.g., `SWIGGY ₹240` or `UPI/987654321 ₹450`), but never capture **why**. Users forget the context of transactions by the end of the week.
+**The Problem**: Traditional expense trackers show *that* money was spent (`SWIGGY ₹240`) but never capture **why**. Users forget the context of a payment within days.
 
-**The Solution**: Capture user intent **at the moment of payment**:
-- **Automatic Ingestion**: Ingest transactions via Indian Bank SMS alerts and UPI app notifications (GPay, PhonePe, Paytm, CRED).
-- **Instant Voice Capture**: A floating mic / home-screen widget allows the user to speak naturally (e.g., *"Spent 650 at Starbucks for cold brew"* or *"Team lunch, reimbursable"*).
-- **Smart Reconciliation Engine**: Matches voice notes with bank SMS/notifications within a $\pm$10-minute window, merging the bank's accurate financial data with the user's rich voice context into a single **`Merged`** transaction.
+**The Solution**: Capture intent **at the moment of payment**:
+
+- **Dual-channel ingestion** — bank SMS *and* UPI app notifications (GPay, PhonePe, Paytm, CRED), running concurrently.
+- **Instant voice capture** — a home-screen widget and a notification action, both opening a native mic sheet in well under a second.
+- **Two-way matching** — a spoken note recorded before or during payment reconciles against the bank record that follows; a bank record with no note joins a queue asking the user what it was for.
 
 ---
 
@@ -19,133 +22,164 @@
 
 ```
 ken-finance/
-├── plan.md                          # Master architectural specification & roadmap
-├── CONTEXT.md                       # This context file for AI agents & developers
-├── backend/                         # Node.js Express Backend
-│   ├── index.js                     # Express server entry point (CORS, JSON, health check)
-│   ├── package.json                 # Backend dependencies (express, nodemon, dotenv, cors)
-│   └── .env                         # Server environment configuration (PORT=5000)
-│
-└── frontend/                        # React Native (Expo SDK 57) Client
-    ├── App.tsx                      # Main application screen mounting all components
-    ├── app.json                     # Expo configuration (name: Ken Finance, slug: ken-finance)
-    ├── package.json                 # Frontend dependencies (react-native, expo, zustand, etc.)
-    ├── tsconfig.json                # TypeScript compiler configuration
+├── rules.md                         # Binding engineering conventions — read first
+├── plan.md                          # Architecture & roadmap
+├── CONTEXT.md                       # This file
+├── backend/                         # Node.js Express backend (health route only so far)
+└── frontend/                        # React Native (Expo SDK 57) client
+    ├── App.tsx
+    ├── modules/ken-ingestion/       # Local Expo module — all Android native code
+    │   ├── expo-module.config.json
+    │   └── android/src/main/
+    │       ├── AndroidManifest.xml
+    │       ├── java/expo/modules/keningestion/
+    │       │   ├── KenIngestionModule.kt        # JS bridge
+    │       │   ├── SmsReceiver.kt               # SMS capture
+    │       │   ├── PaymentNotificationListener.kt
+    │       │   ├── IngestionInbox.kt            # staging buffer
+    │       │   ├── VoiceNoteBuffer.kt           # captured notes awaiting JS
+    │       │   ├── SkipBuffer.kt                # widget skips awaiting JS
+    │       │   ├── WidgetState.kt               # what the widget displays
+    │       │   ├── KenWidgetProvider.kt         # home-screen widget
+    │       │   ├── VoiceCaptureActivity.kt      # the mic sheet
+    │       │   └── PendingNoteNotifier.kt       # single updating notification
+    │       └── res/                             # layouts, strings, theme
     └── src/
-        ├── types/
-        │   └── transaction.ts       # Strict Transaction TypeScript interface & enums
-        ├── mock/
-        │   └── transactions.ts      # Initial mock financial data conforming to strict types
+        ├── types/transaction.ts     # Transaction interface & enums
+        ├── ingestion/               # PURE: parse -> dedupe -> materialise
+        │   ├── types.ts             #   IngestionEvent, rejection reasons
+        │   ├── extractors.ts        #   pure field extraction
+        │   ├── parseEvent.ts        #   the single parsing entry point
+        │   ├── dedupe.ts            #   cross-channel deduplication
+        │   ├── ingest.ts            #   parse + dedupe as one step
+        │   ├── ingestion.test.ts    #   27 tests
+        │   └── __fixtures__/        #   redacted message corpus
         ├── store/
-        │   └── useTransactionStore.ts # Zustand global store (CRUD, auto-reconciliation, state)
-        ├── context/
-        │   └── TransactionContext.tsx # React Context alternative for transaction state
-        ├── components/
-        │   ├── FloatingMic.tsx      # Floating mic component (pulsing animation, press-and-hold, live STT)
-        │   └── TransactionReviewModal.tsx # Bottom sheet modal for reviewing/editing before saving
-        ├── hooks/
-        │   └── useSmsListener.ts    # Android SMS listener hook with permission handling
-        └── utils/
-            ├── voiceParser.ts       # NLP / regex parser extracting structured data from spoken voice
-            ├── smsParser.ts         # Regex parser for Indian bank alerts (HDFC, SBI, ICICI, AXIS, etc.)
-            └── reconciliationEngine.ts # Levenshtein distance & timestamp matcher for Voice + SMS
+        │   ├── useTransactionStore.ts  # Zustand — single source of truth
+        │   └── queue.ts             #   pending-note queue selectors
+        ├── hooks/useIngestion.ts    # subscribes both channels, drains buffers
+        ├── native/kenIngestion.ts   # JS bridge wrapper (degrades gracefully)
+        ├── components/              # FloatingMic, TransactionReviewModal
+        ├── utils/
+        │   ├── money.ts             # rupee <-> paise, the only place converting
+        │   ├── voiceParser.ts       # spoken text -> structured fields
+        │   └── reconciliationEngine.ts  # voice <-> bank matching
+        └── mock/transactions.ts
 ```
 
 ---
 
-## 3. Strict Data Model (`frontend/src/types/transaction.ts`)
+## 3. Data Model (`frontend/src/types/transaction.ts`)
 
-All transactions across the frontend and backend adhere strictly to this schema:
+**Money is `amountMinor`: an integer number of paise. Never a float, never rupees.** See rules.md §1.
 
 ```typescript
-export type TransactionCategory =
-  | 'Dining'
-  | 'Grocery'
-  | 'Transport'
-  | 'Rent'
-  | 'Bills'
-  | 'P2P Transfer'
-  | 'Investment'
-  | 'Others';
+interface Transaction {
+  id: string;
+  amountMinor: number;          // 24000 === ₹240.00
+  title: string;
+  category: TransactionCategory; // closed enum of 8
+  paidTo: string;
+  accountInfo: string;
+  transactionType: 'Debit' | 'Credit';
+  timestamp: string;             // ISO 8601
 
-export type TransactionType = 'Debit' | 'Credit';
+  source: 'Voice-only' | 'SMS-parsed' | 'Notification-parsed' | 'Merged' | 'Manual';
+  channel: 'sms' | 'notification' | 'voice' | 'manual';
 
-export type TransactionSource = 'Voice-only' | 'SMS-parsed' | 'Merged';
+  refNo: string | null;          // bank reference / UPI RRN — primary dedupe key
+  accountTail: string | null;
+  dedupeKey: string;
+  rawPayload: string | null;     // original message, kept forever
 
-export interface Transaction {
-  id: string;                       // UUID string
-  amount: number;                   // Transaction value (UI in Rupees, DB in paise)
-  title: string;                    // Description (e.g., 'Dinner at Social')
-  category: TransactionCategory;    // Strict category enum
-  paidTo: string;                   // Merchant or person (e.g., 'Swiggy', 'Rahul Sharma')
-  accountInfo: string;              // Account details (e.g., 'HDFC - 4392' or 'Cash/Default')
-  transactionType: TransactionType; // 'Debit' | 'Credit'
-  timestamp: string;                // ISO 8601 string
-  source: TransactionSource;        // 'Voice-only' | 'SMS-parsed' | 'Merged'
+  status: 'pending_note' | 'complete' | 'ignored' | 'needs_review';
+  skippedCount: number;
+  lastPromptedAt: string | null;
+
+  note: string | null;
+  transcript: string | null;
+  audioPath: string | null;
 }
 ```
 
 ---
 
-## 4. Implemented Systems & How They Work
+## 4. Implemented Systems
 
-### A. Voice Capture & Parsing (`FloatingMic.tsx` + `voiceParser.ts`)
-1. **Interactive Interaction**: Press-and-hold the mic button to stream live transcription. A pulsing animation and live transcript tooltip are displayed.
-2. **Cross-Platform Compatibility**:
-   - Custom native build: Uses `@react-native-voice/voice`.
-   - Web browser: Automatically falls back to the native **Web Speech API** (`webkitSpeechRecognition`).
-   - Expo Go sandbox: Shows a quick voice tester / simulator dialog so voice parsing can be tested without native linking.
-3. **Voice Parser**: Extracts amount, merchant (`paidTo`), category, purpose (`title`), and transaction type from spoken natural language (e.g., *"Spent 650 at Starbucks for cold brew"* &rarr; `amount: 650`, `paidTo: "Starbucks"`, `title: "Cold Brew"`, `category: "Dining"`, `transactionType: "Debit"`).
+### A. Dual-channel ingestion (`src/ingestion/`, `modules/ken-ingestion/`)
 
-### B. Android SMS Bank Ingestion (`useSmsListener.ts` + `smsParser.ts`)
-1. **Permission Handling**: Dynamically requests `READ_SMS` and `RECEIVE_SMS` on Android devices via `PermissionsAndroid`.
-2. **Bank Filtering**: Detects bank sender headers (`HDFC`, `SBI`, `ICICI`, `AXIS`, `KOTAK`, `PNB`, `IDFC`, `PAYTM`, etc.).
-3. **Extraction**: Uses regex to pull numeric amount, account number tail (`*4392`), recipient / VPA (`swiggy@icici`), and debit/credit status.
+Native captures, JavaScript decides. There is **one** parsing path; nothing else in the app may parse a payment.
 
-### C. Reconciliation Engine (`reconciliationEngine.ts`)
-When an SMS alert arrives:
-1. **Window Check**: Checks if any `Voice-only` transaction exists within $\pm 10\text{ minutes}$.
-2. **Amount Parity**: Ensures the amount matches within tolerance ($\le ₹1.00$).
-3. **Similarity Check**: Computes **Levenshtein Distance** string similarity between the voice merchant and the SMS VPA / merchant.
-4. **Consolidation**: Generates a single **`Merged`** transaction using:
-   - `amount`: SMS amount (bank truth)
-   - `title`: Voice title (rich user note)
-   - `category`: Voice category (user intent)
-   - `paidTo`: Cleaned merchant name
-   - `accountInfo`: SMS account identifier (e.g., `'HDFC - 4392'`)
-   - `source`: `'Merged'`
+1. `SmsReceiver` (static manifest registration, so it fires before the app is ever opened) reassembles multipart SMS by sender and buffers the text.
+2. `PaymentNotificationListener` filters to an app allowlist and prefers `EXTRA_BIG_TEXT`, because the truncated `EXTRA_TEXT` often cuts off the reference number.
+3. Both write to `IngestionInbox` and publish to `IngestionBus`. JS drains the buffer on foreground and receives live events when running.
+4. `parseIngestionEvent` extracts amount (in paise), direction, merchant/VPA, account tail, reference number and date, and **rejects** OTPs, promotions, collect requests, failed transactions, balance alerts and future-dated mandates.
+5. `findDuplicate` collapses the same payment seen on both channels — reference number first, then amount + account tail within 3 minutes. `mergeDuplicate` keeps the UPI app's clean merchant name while adopting the bank's reference number.
 
-### D. Review Modal Bottom Sheet (`TransactionReviewModal.tsx`)
-- Appears when a voice entry is spoken or when an SMS alert is detected.
-- Allows editing all fields (amount, title, category pills, paidTo, accountInfo, Debit/Credit toggle).
-- Displays a source badge (`Voice Input`, `SMS Alert`, `Reconciled & Merged`).
-- Provides **Confirm & Save** (updates Zustand store) and **Discard** buttons.
+**Why both channels?** Play restricts `READ_SMS` to a permitted-use list that excludes expense tracking, so the notification path is the one that survives review; SMS gives wider bank coverage. Running both makes deduplication the critical component, not capture.
+
+### B. Pending-note queue (`src/store/queue.ts`)
+
+Bank events arrive as `status: 'pending_note'` and form an ordered backlog.
+
+- Ordered `skippedCount ASC, timestamp ASC` — oldest first, skipped items sunk. Ordering is **derived**, never stored; a persisted position drifts when a late notification arrives out of order.
+- **Widget tap** opens the queue head. **Notification tap** opens the payment it came from — that one is fresh, and forcing recall of an older payment first is the friction this app exists to remove.
+- Escape hatches: skip (sinks it), ignore, and auto-retire to `needs_review` after 3 skips or 7 days. A widget showing an item the user cannot clear teaches them to ignore the widget.
+
+### C. Voice capture (`VoiceCaptureActivity`)
+
+Plain Android with **no React Native on the path** — booting the bridge costs 1–2s and the user abandons. Uses `SpeechRecognizer` with `en-IN` and `EXTRA_PREFER_OFFLINE`.
+
+**Known constraint:** on most devices `SpeechRecognizer` takes exclusive hold of the microphone, so the parallel `MediaRecorder` capture usually fails and `audioPath` is null. Recognition is what must work; the raw recording is best-effort. The transcript is therefore **always** shown as editable text before saving — correction is the normal flow, not an error path.
+
+### D. Reconciliation (`src/utils/reconciliationEngine.ts`)
+
+When a bank record arrives, any `Voice-only` transaction within ±10 minutes, matching on amount (±₹1, in paise) and merchant similarity (Levenshtein), is merged. Bank wins on `amountMinor`, `accountInfo`, `timestamp`, `refNo`; voice wins on `title`, `category`, `note`.
 
 ---
 
 ## 5. Development & Run Commands
 
-### Backend:
 ```bash
-cd backend
-npm install
-npm run dev     # Runs Express on port 5000 with nodemon auto-reloading
-```
-
-### Frontend:
-```bash
+# Frontend
 cd frontend
 npm install
-npm start       # Starts Expo Metro bundler for mobile testing (Expo Go)
-npm run web     # Starts Expo in the web browser
+npm run typecheck    # tsc --noEmit — must be clean before every commit
+npm test             # 27 tests, node:test via tsx
+npx expo prebuild -p android   # required: native modules mean no Expo Go
+npx expo run:android           # or open frontend/android/ in Android Studio
+
+# Backend
+cd backend && npm install && npm run dev   # Express on :5000
 ```
+
+**Testing in Android Studio:** the emulator's Extended Controls → Phone → SMS sends a real SMS through the actual `SmsReceiver`, so the SMS path is testable without spending money. UPI app notifications cannot be produced on an emulator — use the module's `simulateEvent` for those.
 
 ---
 
-## 6. Guidelines for AI Agents & Teammates
+## 6. Current Status
 
-1. **Maintain Category Integrity**: Always constrain categories to the 8 strict enum values (`'Dining' | 'Grocery' | 'Transport' | 'Rent' | 'Bills' | 'P2P Transfer' | 'Investment' | 'Others'`).
-2. **Source of Truth**: When reconciling, the bank (SMS/notification) is the source of truth for **amount**, **accountInfo**, and **timestamp**; the user's voice log is the source of truth for **title** (context) and **category** (intent).
-3. **Type Safety**: Always run `npx tsc --noEmit` in `frontend/` after making changes to ensure zero TypeScript errors.
-4. **Offline First**: All frontend interactions should read and write through `useTransactionStore` (Zustand) so state remains fast and offline-capable before syncing with the backend database.
+| Area | State |
+|---|---|
+| Ingestion pipeline (parse, dedupe, reject) | Done, 27 tests passing |
+| Pending-note queue | Done, tested |
+| Money as integer paise | Done |
+| Native module (Kotlin) | Written, **not yet compiled or run** |
+| Widget + voice capture | Written, **not yet run on device/emulator** |
+| Backend / Supabase | Not started — Express has a health route only |
+| Budgets & analytics | Not started |
 
+**Next step:** `npx expo prebuild -p android` and a first Gradle build. The Kotlin has never been compiled, so expect ordinary build errors on the first pass.
+
+---
+
+## 7. Guidelines for Agents & Teammates
+
+See `rules.md` — it is binding. The points most often violated:
+
+1. **Money is integer paise.** Convert only at the UI boundary, only via `utils/money.ts`.
+2. **One parser.** All payment parsing goes through `src/ingestion/`. Never add a second.
+3. **Zustand is the single source of truth.** No parallel Context or local mirror.
+4. **Parsers are pure and return `null` rather than guessing.** A wrong merchant is worse than a missing one.
+5. **Every parser change ships with fixtures**, including reject-cases.
+6. Run `npm run typecheck` and `npm test` before pushing.

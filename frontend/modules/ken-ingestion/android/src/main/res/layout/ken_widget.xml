@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  RemoteViews only. No scrolling list: the widget shows the queue head plus a
+  count, because that is all RemoteViews renders well and all the user needs
+  before tapping through to the capture sheet.
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/ken_widget_bg"
+    android:gravity="center_vertical"
+    android:orientation="horizontal"
+    android:padding="14dp">
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/widget_amount"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:maxLines="1"
+            android:ellipsize="end"
+            android:textColor="#FF111827"
+            android:textSize="20sp"
+            android:textStyle="bold"
+
+        <TextView
+            android:id="@+id/widget_merchant"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:maxLines="1"
+            android:ellipsize="end"
+            android:textColor="#FF6B7280"
+            android:textSize="13sp" />
+
+        <TextView
+            android:id="@+id/widget_backlog"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:maxLines="1"
+            android:textColor="#FF9CA3AF"
+            android:textSize="11sp" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/widget_skip"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginEnd="12dp"
+        android:padding="8dp"
+        android:text="@string/ken_skip"
+        android:textColor="#FF6B7280"
+        android:textSize="13sp" />
+
+    <ImageView
+        android:id="@+id/widget_mic"
+        android:layout_width="52dp"
+        android:layout_height="52dp"
+        android:background="@drawable/ken_mic_bg"
+        android:contentDescription="@string/ken_add_note"
+        android:padding="14dp"
+        android:src="@android:drawable/ic_btn_speak_now"
+        android:tint="#FFFFFFFF" />
+
+</LinearLayout>

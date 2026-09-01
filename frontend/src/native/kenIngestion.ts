@@ -38,13 +38,32 @@ interface KenIngestionNativeModule {
   /** Returns and clears everything captured while JS was not running. */
   drainInbox(): Promise<NativeIngestionEvent[]>;
 
+  /** Voice notes recorded by the native capture sheet, awaiting attachment. */
+  drainVoiceNotes(): Promise<NativeVoiceNote[]>;
+
+  /** Transaction ids the user skipped from the widget while JS was dead. */
+  drainSkips(): Promise<string[]>;
+
   /** Pushes the current queue head to the home-screen widget. */
-  updateWidget(payload: {
-    transactionId: string | null;
-    amountMinor: number | null;
-    merchant: string | null;
-    pendingCount: number;
-  }): Promise<void>;
+  updateWidget(payload: WidgetPayload): Promise<void>;
+
+  /** Dev affordance: pushes a fake event through the real native path. */
+  simulateEvent(payload: NativeIngestionEvent): Promise<void>;
+}
+
+export interface NativeVoiceNote {
+  /** null means the note belongs to whatever is at the head of the queue. */
+  transactionId: string | null;
+  transcript: string;
+  audioPath: string | null;
+  capturedAt: number;
+}
+
+export interface WidgetPayload {
+  transactionId: string | null;
+  amountMinor: number | null;
+  merchant: string | null;
+  pendingCount: number;
 }
 
 const nativeModule: KenIngestionNativeModule | undefined =
@@ -94,14 +113,29 @@ export async function drainInbox(): Promise<NativeIngestionEvent[]> {
   return nativeModule.drainInbox();
 }
 
-export async function updateWidget(payload: {
-  transactionId: string | null;
-  amountMinor: number | null;
-  merchant: string | null;
-  pendingCount: number;
-}): Promise<void> {
+export async function drainVoiceNotes(): Promise<NativeVoiceNote[]> {
+  if (!nativeModule) return [];
+  return nativeModule.drainVoiceNotes();
+}
+
+export async function drainSkips(): Promise<string[]> {
+  if (!nativeModule) return [];
+  return nativeModule.drainSkips();
+}
+
+export async function updateWidget(payload: WidgetPayload): Promise<void> {
   if (!nativeModule) return;
   return nativeModule.updateWidget(payload);
+}
+
+/**
+ * Pushes a fabricated event through the real native path.
+ * Useful in Android Studio, where the emulator can also send genuine SMS via
+ * Extended Controls but cannot produce UPI app notifications.
+ */
+export async function simulateEvent(event: NativeIngestionEvent): Promise<void> {
+  if (!nativeModule) return;
+  return nativeModule.simulateEvent(event);
 }
 
 /** Normalises a native event into the shape the parser expects. */

@@ -18,7 +18,11 @@ Reading bank SMS is the obvious design, and it is the one Google Play rejects.
 
 `READ_SMS`/`RECEIVE_SMS` are restricted permissions with a closed permitted-use list. It does include "SMS-based financial transactions (UPI)" — but scoped to *verifying* transactions, not to personal expense tracking. Expense trackers with SMS auto-import get rejected on exactly this line.
 
-**So notifications become the primary ingestion source, not the fallback.** `NotificationListenerService` is not in the SMS permission group at all, so it sidesteps that policy entirely. It's governed by ordinary sensitive-data rules: prominent disclosure, a privacy policy, and don't exfiltrate more than you need — all satisfiable.
+**Decision: both channels run concurrently, with notifications as the one that survives review.**
+
+SMS gives the widest bank coverage and allows historical backfill; notifications sidestep the SMS policy entirely and carry better merchant names. Running both means a single payment arrives two or three times, so deduplication — not capture — is the load-bearing piece.
+
+**Notifications are the primary source, not the fallback.** `NotificationListenerService` is not in the SMS permission group at all, so it sidesteps that policy entirely. It's governed by ordinary sensitive-data rules: prominent disclosure, a privacy policy, and don't exfiltrate more than you need — all satisfiable.
 
 Two things make notifications *better* than SMS here, not merely safer:
 
@@ -27,7 +31,7 @@ Two things make notifications *better* than SMS here, not merely safer:
 
 Honest tradeoffs: notification access is granted in Settings → Special app access, not a normal permission dialog (one-time friction, needs a good onboarding screen); there is **no historical backfill** (SMS inbox can be queried, notifications cannot — day one starts empty); and a muted or instantly-dismissed notification is a missed transaction. Manual entry stays as the safety net.
 
-Keep `READ_SMS` behind a build flag. It costs little to leave the seam, and for a sideloaded personal build it unlocks inbox backfill.
+`READ_SMS` ships alongside it. If Play ever rejects the SMS declaration, removing that permission degrades coverage without breaking the app, because the notification path already carries bank SMS through the messaging app's notification.
 
 ---
 
@@ -37,7 +41,7 @@ Keep `READ_SMS` behind a build flag. It costs little to leave the seam, and for 
 Bank / UPI notification
         │
         ▼
-[Kotlin] NotificationListenerService ──► Room "inbox" table (raw, unparsed)
+[Kotlin] SmsReceiver + NotificationListener ──► staging buffer (raw, unparsed)
         │                                        │
         │ (posts immediately)                    │ drained on app foreground
         ▼                                        ▼
@@ -56,16 +60,20 @@ Bank / UPI notification
                                                 └─► Claude (categorization)
 ```
 
-**The hot path is entirely native Kotlin.** This is the single most important performance decision in the plan. Booting the React Native bridge to open a microphone takes 1–2 seconds; a user standing at a counter will abandon. Kotlin writes to a Room staging table, and JS drains it later when the app is opened. `react-native-android-widget` renders the widget's *appearance* from React components, but must not be on the capture path.
+**The hot path is entirely native Kotlin.** This is the single most important performance decision in the plan. Booting the React Native bridge to open a microphone takes 1–2 seconds; a user standing at a counter will abandon. Kotlin writes to a staging buffer, and JS drains it later when the app is opened.
+
+**The staging buffer is SharedPreferences-backed JSON, not Room.** It holds a handful of events for minutes at a time, and a `BroadcastReceiver` can be killed the instant `onReceive` returns — a synchronous `commit()` with no codegen, no KSP and no migrations fits that shape. Room would be right only if this became long-lived queryable storage, and it does not: the transaction store lives in JS. `react-native-android-widget` renders the widget's *appearance* from React components, but must not be on the capture path.
 
 ### Native module
 
 Write **one Kotlin Expo module** (~400 lines) rather than depending on three community libraries. `expo-widgets` is iOS-only; the SMS libraries are tested up to Expo SDK 50 and this project is on 57. The module owns:
 
+- `SmsReceiver` (static registration, multipart reassembly)
 - `NotificationListenerService` + package allowlist (bank apps, UPI apps, messaging apps)
 - `AppWidgetProvider` + `RemoteViews` updates
 - `VoiceCaptureActivity` (translucent, `showWhenLocked`)
-- Room staging table and its JS bridge
+- `PendingNoteNotifier` — one in-place-updating notification with a mic action
+- The staging buffers and their JS bridge
 
 Android details that will bite otherwise: widgets are `RemoteViews` and **cannot** record audio or host arbitrary views — the mic must be a `PendingIntent`. Android 12+ requires explicit `FLAG_IMMUTABLE`/`FLAG_MUTABLE` on every `PendingIntent`. Background activity starts are blocked on 12+, but a widget tap is user-initiated and therefore allowed. `updatePeriodMillis` has a 30-minute floor — irrelevant, since we push updates imperatively.
 
@@ -240,7 +248,7 @@ Phase 2 is the honest MVP line — everything after it is leverage on a product 
 
 **Ingestion:** dev-only screen that injects a fake notification payload directly into the Room inbox, bypassing the listener.
 
-**Widget:** real device only. `adb shell dumpsys notification` to confirm the listener is bound; add the widget, inject a fake transaction, confirm the widget re-renders within ~1s.
+**Widget and ingestion in Android Studio:** the emulator covers most of this. Extended Controls → Phone → SMS sends a real bank-shaped SMS through the actual `SmsReceiver`, so the SMS path needs no real money to test. `adb shell dumpsys notification` confirms the listener is bound. UPI app notifications cannot be produced on an emulator — use `simulateEvent` for those. A physical device is only needed for genuine bank/UPI notifications and for judging real microphone accuracy.
 
 **Queue:** inject 4 fake transactions with staggered timestamps; assert the widget shows the oldest and `+3 more`, that chained capture walks all four without returning to the home screen, that a skipped item reappears at the back, and that an item skipped 3 times leaves the widget for `needs_review`.
 
