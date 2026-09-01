@@ -18,6 +18,7 @@ import type {
   TransactionType,
   TransactionSource,
 } from '../types/transaction';
+import { paiseToRupees, rupeesToPaise } from '../utils/money';
 
 export interface TransactionReviewModalProps {
   visible: boolean;
@@ -91,7 +92,13 @@ export const TransactionReviewModal: React.FC<TransactionReviewModalProps> = ({
   // Auto-populate form when initialData changes
   useEffect(() => {
     if (initialData) {
-      setAmount(initialData.amount !== undefined ? String(initialData.amount) : '');
+      // The form edits rupees because that is what people type; storage stays
+      // in paise (rules.md §1).
+      setAmount(
+        initialData.amountMinor !== undefined
+          ? String(paiseToRupees(initialData.amountMinor))
+          : '',
+      );
       setTitle(initialData.title || '');
       setCategory(initialData.category || 'Others');
       setPaidTo(initialData.paidTo || '');
@@ -104,10 +111,24 @@ export const TransactionReviewModal: React.FC<TransactionReviewModalProps> = ({
   }, [initialData, visible]);
 
   const handleConfirmSave = () => {
-    const parsedAmount = parseFloat(amount) || 0;
+    const generatedId =
+      txId || `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+
     const finalTransaction: Transaction = {
-      id: txId || `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
-      amount: parsedAmount,
+      // Carry through ingestion metadata (refNo, dedupeKey, rawPayload…) that
+      // the form does not expose but must not drop.
+      refNo: initialData?.refNo ?? null,
+      accountTail: initialData?.accountTail ?? null,
+      dedupeKey: initialData?.dedupeKey ?? `manual:${generatedId}`,
+      rawPayload: initialData?.rawPayload ?? null,
+      channel: initialData?.channel ?? 'manual',
+      skippedCount: initialData?.skippedCount ?? 0,
+      lastPromptedAt: initialData?.lastPromptedAt ?? null,
+      transcript: initialData?.transcript ?? null,
+      audioPath: initialData?.audioPath ?? null,
+
+      id: generatedId,
+      amountMinor: rupeesToPaise(parseFloat(amount) || 0),
       title: title.trim() || 'Transaction',
       category,
       paidTo: paidTo.trim() || 'Unknown',
@@ -115,6 +136,10 @@ export const TransactionReviewModal: React.FC<TransactionReviewModalProps> = ({
       transactionType,
       timestamp: timestamp || new Date().toISOString(),
       source,
+      // Confirming the form is the user supplying the missing context, so the
+      // record leaves the pending-note queue.
+      status: 'complete',
+      note: title.trim() || null,
     };
 
     onSave(finalTransaction);

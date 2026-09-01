@@ -1,3 +1,4 @@
+import { isBankSourced } from '../types/transaction';
 import type { Transaction } from '../types/transaction';
 
 /**
@@ -6,9 +7,10 @@ import type { Transaction } from '../types/transaction';
 export const RECONCILIATION_TIME_WINDOW_MS = 10 * 60 * 1000;
 
 /**
- * Maximum floating point tolerance for amount comparison (e.g. ₹1.00)
+ * Amount tolerance when matching a spoken amount to a bank amount, in paise.
+ * ₹1.00 — people round when speaking ("about 240") but the bank never does.
  */
-export const AMOUNT_TOLERANCE = 1.0;
+export const AMOUNT_TOLERANCE_MINOR = 100;
 
 /**
  * Minimum normalized string similarity score (0.0 to 1.0)
@@ -108,14 +110,15 @@ export interface ReconciliationMatchResult {
 }
 
 /**
- * Evaluates whether a Voice-only transaction matches an SMS-parsed transaction
+ * Evaluates whether a Voice-only transaction matches a bank-sourced one
  */
 export function evaluateMatch(
   voiceTx: Transaction,
   smsTx: Transaction
 ): { isMatch: boolean; score: number } {
-  // 1. Must be Voice-only and SMS-parsed
-  if (voiceTx.source !== 'Voice-only' || smsTx.source !== 'SMS-parsed') {
+  // 1. Must pair a spoken note with a bank record. Notifications count as
+  // bank-sourced too, now that both ingestion channels run concurrently.
+  if (voiceTx.source !== 'Voice-only' || !isBankSourced(smsTx.source)) {
     return { isMatch: false, score: 0 };
   }
 
@@ -128,9 +131,9 @@ export function evaluateMatch(
     return { isMatch: false, score: 0 };
   }
 
-  // 3. Amount parity check (within minor tolerance)
-  const amountDiff = Math.abs(voiceTx.amount - smsTx.amount);
-  if (amountDiff > AMOUNT_TOLERANCE) {
+  // 3. Amount parity check (within tolerance, in paise)
+  const amountDiff = Math.abs(voiceTx.amountMinor - smsTx.amountMinor);
+  if (amountDiff > AMOUNT_TOLERANCE_MINOR) {
     return { isMatch: false, score: 0 };
   }
 
@@ -157,20 +160,31 @@ export function evaluateMatch(
  */
 export function mergeTransactions(voiceTx: Transaction, smsTx: Transaction): Transaction {
   return {
+    ...smsTx,
     id: smsTx.id || voiceTx.id,
-    amount: smsTx.amount, // SMS amount (source of truth)
-    title: voiceTx.title, // Voice title (rich user context)
-    category: voiceTx.category, // Voice category
-    paidTo: cleanMerchantName(voiceTx.paidTo, smsTx.paidTo), // Cleaned merchant name
-    accountInfo: smsTx.accountInfo, // SMS account identifier (e.g. 'HDFC - 4392')
-    transactionType: smsTx.transactionType, // SMS type
-    timestamp: smsTx.timestamp, // SMS timestamp
-    source: 'Merged', // Marked as Merged
+    // Bank wins on the financial facts (rules.md §5).
+    amountMinor: smsTx.amountMinor,
+    accountInfo: smsTx.accountInfo,
+    accountTail: smsTx.accountTail,
+    transactionType: smsTx.transactionType,
+    timestamp: smsTx.timestamp,
+    refNo: smsTx.refNo,
+    // The user's voice wins on intent.
+    title: voiceTx.title,
+    category: voiceTx.category,
+    note: voiceTx.note ?? voiceTx.title,
+    transcript: voiceTx.transcript,
+    audioPath: voiceTx.audioPath,
+    paidTo: cleanMerchantName(voiceTx.paidTo, smsTx.paidTo),
+    source: 'Merged',
+    // The whole point of a merge is that the payment now has its context, so
+    // it leaves the pending-note queue.
+    status: 'complete',
   };
 }
 
 /**
- * Reconciles an incoming SMS-parsed transaction against a pool of existing transactions.
+ * Reconciles an incoming bank transaction against a pool of existing transactions.
  * Returns the merged transaction and the ID of the matched voice transaction to replace.
  */
 export function reconcileIncomingSms(
@@ -214,8 +228,19 @@ export function reconcileTransactionList(transactions: Transaction[]): {
   mergedCount: number;
 } {
   const voiceList = transactions.filter((t) => t.source === 'Voice-only');
-  const smsList = transactions.filter((t) => t.source === 'SMS-parsed');
-  const others = transactions.filter((t) => t.source === 'Merged');
+
+  // Only bank records that have NOT already been merged are candidates.
+  // Including 'Merged' here would both re-merge them and duplicate them into
+  // the output, since they are carried through in `others`.
+  const smsList = transactions.filter(
+    (t) => t.source === 'SMS-parsed' || t.source === 'Notification-parsed',
+  );
+
+  // Everything that is neither a merge candidate nor a voice note — merged
+  // records and manual entries — passes through untouched.
+  const others = transactions.filter(
+    (t) => t.source === 'Merged' || t.source === 'Manual',
+  );
 
   const matchedVoiceIds = new Set<string>();
   const mergedResults: Transaction[] = [];
