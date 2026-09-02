@@ -1,151 +1,327 @@
-# Ken Finance — What's Next
+# Ken Finance — Agent Handoff & Work Queue
 
-> Living backlog, ordered by what unblocks the most. See `rules.md` for binding
-> conventions, `plan.md` for architecture, `CONTEXT.md` for current state.
+> **You are picking up an in-progress project. Read this whole file before touching anything.**
 >
-> **Status at time of writing:** the decision layer (parse, dedupe, queue) is
-> built and tested. The capture layer (Kotlin) is written but has never been
-> compiled. Nothing has ingested a real payment yet.
+> This file is written to be executed autonomously. It tells you what the
+> project is, what state it is actually in, what you must not break, what to
+> work on next, and how to know when you are done.
 
 ---
 
-## 0. Blocking everything — get the Kotlin to compile
+## 1. Orientation — read these first, in this order
 
-Nothing below can be validated until the native module builds. This needs a
-machine with the Android SDK installed.
+| File | What it gives you |
+|---|---|
+| `rules.md` | **Binding** engineering conventions. Not advisory. |
+| `plan.md` | Architecture and the reasoning behind it |
+| `CONTEXT.md` | Current implementation state |
+| `todo_next.md` | This file — what to do next |
 
-- [ ] `cd frontend && npx expo prebuild -p android --clean`
-- [ ] `npx expo run:android` (or open `frontend/android/` in Android Studio)
-- [ ] Fix the first round of Kotlin compile errors — the code has been reviewed
-      but never compiled, so expect ordinary ones: import paths, Expo Modules
-      API signatures, resource references
-- [ ] Confirm `NativeModules.KenIngestion` is defined at runtime. If it is
-      `undefined`, every bridge call silently no-ops and the app will look
-      like it works while capturing nothing
-
-**Known risk areas, in rough order of likelihood**
-
-1. `expo-module-gradle-plugin` availability and whether the `android` block in
-   `modules/ken-ingestion/android/build.gradle` conflicts with what it sets
-2. `AsyncFunction` signatures in `KenIngestionModule.kt` — multi-parameter
-   lambdas and nullable arguments are the fiddliest part of the Expo API
-3. `R` resource resolution inside the module (layouts, strings, plurals)
-4. `android:showWhenLocked` on the capture Activity requires API 27; `minSdk`
-   is 24, so lint may complain even though it is ignored at runtime
+**The product in one sentence:** Indian bank and UPI apps tell you *that* you
+spent money but never *why*, so Ken captures a spoken note at the moment of
+payment — a home-screen widget shows the payment that just landed and offers
+one mic button.
 
 ---
 
-## 1. Prove ingestion end to end
+## 2. Establish your baseline before changing anything
 
-Once it builds, verify the pipeline against real inputs rather than fixtures.
+Run these first. If they do not pass on a clean checkout, **stop and report
+that** — do not start work on top of a broken baseline.
 
-- [ ] **SMS path** — Android Studio → Extended Controls → Phone → SMS. Send a
-      real bank-shaped message. This exercises the actual `SmsReceiver`, so no
-      real money is needed
-- [ ] **Notification path** — cannot be emulated. Use the module's
-      `simulateEvent`, then confirm on a physical device with a real UPI app
-- [ ] **Dedupe in the wild** — make one ₹1 UPI payment with both channels
-      granted. Assert exactly one transaction row. This is the single most
-      important manual check; everything downstream is worthless if payments
-      double-count
-- [ ] **Widget** — place it, inject an event, confirm it re-renders in ~1s
-- [ ] **Capture latency** — time mic tap to microphone-live. Target <300ms; if
-      it exceeds ~800ms something has pulled the RN bridge onto the hot path
-- [ ] Add fixtures for every real message shape encountered, especially any
-      that parse wrong. Bugs get a fixture *before* the fix (rules.md §4)
+```bash
+cd frontend
+npm install
+npm run typecheck   # must print nothing
+npm test            # must report 27+ pass, 0 fail
+```
+
+Both are also your definition of done for every task below. Never commit with
+either failing.
 
 ---
 
-## 2. Persistence — currently everything is lost on app restart
+## 3. What is actually true right now
 
-The store is in-memory Zustand seeded from mock data. This is the largest
-functional gap after capture.
+Be precise about this, because two parts of the codebase have very different
+levels of trust.
 
-- [ ] Local SQLite (`expo-sqlite`) as the source of truth, with the Zustand
-      store hydrating from it. Offline-first is non-negotiable: SMS arrives
-      when there is no network and must never be dropped
-- [ ] Migration from the current in-memory shape; write it now while there is
-      no real user data
-- [ ] Supabase project — Postgres schema mirroring `Transaction`, phone-OTP
-      auth, storage bucket for audio
-- [ ] Sync queue with conflict handling. Device wins on `note`/`category`;
-      server wins on nothing yet, since there is one client
-- [ ] Wire the existing Express server as the API layer — it is still just a
-      health route
+### Built and verified
+- **Money as integer paise** (`src/utils/money.ts`). Field is `amountMinor`.
+- **Ingestion pipeline** (`src/ingestion/`) — one parser for both channels;
+  extracts amount, direction, merchant, account tail, reference number, date;
+  rejects OTPs, promos, collect requests, failed txns, balance alerts.
+- **Cross-channel dedupe** (`src/ingestion/dedupe.ts`) — reference number
+  first, then amount + account tail within 3 minutes.
+- **Pending-note queue** (`src/store/queue.ts`) — oldest first, skips sink,
+  auto-retire after 3 skips or 7 days.
+- 27 tests in `src/ingestion/ingestion.test.ts`.
 
-**Schema note:** `amount_minor BIGINT`, never a float, on the server too.
-A `UNIQUE` constraint on `dedupe_key` so double-counting is caught at the
-database level and not only in app logic.
+### Written but NEVER COMPILED — do not trust it
+Everything in `frontend/modules/ken-ingestion/` (~900 lines of Kotlin): SMS
+receiver, notification listener, staging buffers, widget, voice capture
+Activity, notification prompt.
 
----
+It autolinks and `expo prebuild` succeeds, but no Android SDK was available on
+the machine where it was written. **It has never been through a compiler.**
 
-## 3. Kill the categorization tedium
+> If `NativeModules.KenIngestion` is `undefined` at runtime, every bridge call
+> silently no-ops — the app looks like it is working while capturing nothing.
+> Check this explicitly before concluding anything about capture.
 
-The original problem. Three tiers, cheapest first.
+### Does not exist
+- **Persistence.** `useTransactionStore` is in-memory, seeded from
+  `src/mock/transactions.ts` on every launch. Nothing survives restart.
+- Backend (Express is a health route only), Supabase, sync.
+- Merchant memory, LLM categorization.
+- Budgets, analytics, history views.
 
-- [ ] **Merchant memory** — categorize `Swiggy` once, every future Swiggy is
-      automatic. Free, instant, and after a few weeks covers most volume.
-      Build this before touching an LLM; it does the bulk of the work
-- [ ] **Shipped merchant dictionary** — a few hundred common Indian merchants
-      pre-mapped so the app is not useless on day one
-- [ ] **Claude fallback** — only for genuinely new merchants, using the voice
-      transcript as the signal. `claude-opus-5` via `@anthropic-ai/sdk` in the
-      Express layer, structured outputs, taxonomy prompt-cached. Route
-      backfill through the Batch API at 50% cost
-- [ ] Decide on model tier with real data, not upfront. `claude-haiku-4-5` is
-      ~5x cheaper and adequate for short-text classification
-
----
-
-## 4. The payoff — budgets and analytics
-
-None of this exists yet. It is the reason to keep using the app.
-
-- [ ] Monthly budget per category
-- [ ] **Burn rate vs. days remaining** — not "you spent ₹4,200" but "70%
-      through the month, 90% through the food budget"
-- [ ] **Safe-to-spend-today** — the one number people actually act on
-- [ ] Merchant leaderboard
-- [ ] Recurring-subscription detection (same merchant, same amount, ~30d)
-- [ ] Weekly review notification — the natural moment to drain the backlog
-- [ ] **Search over transcripts** — "what did I spend on client meetings?"
-      This is what the voice notes uniquely unlock and no other tracker has
+### The honest summary
+The middle of the core loop (parse → dedupe → queue) is solid. Both ends —
+capture and persistence — are unproven or absent. **No real payment has ever
+gone through this app end to end.**
 
 ---
 
-## 5. Known issues to fix
+## 4. Guardrails — violating these makes things worse, not better
 
-- [ ] **Replay-and-correct is half-built.** `SpeechRecognizer` takes exclusive
-      hold of the microphone on most devices, so the parallel `MediaRecorder`
-      usually fails and `audioPath` stays null. Editing the transcript works;
-      replaying the audio usually will not. Options: accept transcript-only
-      editing, or move to the cloud STT path (record with `expo-audio`,
-      transcribe server-side) which also fixes Hinglish accuracy
-- [ ] **Two allowlists must stay in sync** — `NotificationAllowlist.PACKAGES`
-      in Kotlin (privacy gate: what gets buffered at all) and
-      `NOTIFICATION_PACKAGE_ALLOWLIST` in TypeScript (correctness gate: what
-      gets parsed). Different purposes, same list. Consider generating one
-      from the other
-- [ ] **Parse rules are hardcoded.** `plan.md` calls for a server-fetched
-      versioned rule pack so a new bank ships without an app release. Worth
-      doing before there are real users on old versions
-- [ ] **No historical backfill.** The app starts empty. `READ_SMS` allows
-      querying the SMS inbox via `ContentResolver` — not implemented
-- [ ] `FloatingMic` still assumes it creates a new transaction in some paths;
-      audit it against the queue flow now that notes can attach to existing
-      payments
+These are the failure modes most likely for an agent working here alone.
+
+1. **Never turn money back into a float.** `amountMinor` is integer paise. If
+   you see arithmetic that looks awkward, that is the point. Convert only at
+   the UI boundary, only via `src/utils/money.ts`.
+2. **Never add a second parser.** All payment parsing goes through
+   `src/ingestion/`. If you are tempted to parse an SMS somewhere else, you
+   are about to create two parsers that drift apart.
+3. **Never add a parallel state store.** Zustand is the single source of truth.
+   A React Context mirroring transactions was already deleted once for this.
+4. **Never create `somethingV2.ts`.** Edit the existing file.
+5. **Do not reformat files you were not asked to touch.** It buries the real
+   diff and collides with other agents.
+6. **Do not commit `frontend/android/`.** It is generated by `expo prebuild`
+   and gitignored deliberately.
+7. **Do not commit real SMS or transaction data.** Fixtures must be fabricated
+   and redacted.
+8. **Parsers stay pure and return `null` rather than guessing.** A wrong
+   merchant is worse than a missing one.
+9. **If you change architecture, update `plan.md` and `CONTEXT.md` in the same
+   commit.** Stale docs are how parallel agents collide.
+10. **Report honestly.** Say what you verified versus what you only wrote.
+    Native Android code cannot be verified without a device or emulator — if
+    you did not run it, say so plainly.
 
 ---
 
-## 6. Before anyone else installs this
+## 5. Pick your task
 
-- [ ] Privacy policy — required for both the SMS declaration and notification
-      access, and it needs to be truthful about what leaves the device
-- [ ] Play Console permissions declaration for SMS. Expect rejection: the
-      permitted-use list covers UPI transaction *verification*, not expense
-      tracking. The notification path is designed to survive that outcome, so
-      confirm the app is genuinely usable with `READ_SMS` removed
-- [ ] Onboarding that explains notification access before dumping the user in
-      Settings (the card exists; the full first-run flow does not)
-- [ ] Redaction audit — confirm nothing sends raw message text anywhere, and
-      that fixtures in the repo stay fabricated (rules.md §9)
+Work top-down. Do not skip ahead — later tasks assume earlier ones.
+
+**First, decide which branch of work you can actually do:**
+
+```bash
+# Is an Android SDK available?
+echo "$ANDROID_HOME / $ANDROID_SDK_ROOT"
+ls "$LOCALAPPDATA/Android/Sdk" 2>/dev/null
+```
+
+- **SDK present** → do **TASK A** first (it unblocks everything).
+- **No SDK** → skip TASK A, start at **TASK B**. Say in your report that A was
+  skipped and why. Do not attempt to install an SDK unprompted.
+
+---
+
+## TASK A — Make the Kotlin compile and prove capture works
+
+**Goal:** a real bank SMS becomes exactly one transaction row in the app.
+
+**Why first:** nothing about capture can be trusted until this runs, and every
+later task builds on captured data being real.
+
+```bash
+cd frontend
+npx expo prebuild -p android --clean
+npx expo run:android
+```
+
+**Steps**
+1. Fix compile errors. The code was reviewed but never compiled — expect
+   ordinary ones. Likely spots, in order:
+   - `modules/ken-ingestion/android/build.gradle` — whether the `android`
+     block conflicts with what `expo-module-gradle-plugin` already sets
+   - `AsyncFunction` signatures in `KenIngestionModule.kt` — multi-parameter
+     lambdas with nullable args are the fiddliest part of the Expo API
+   - `R` resource resolution inside the module (layouts, strings, plurals)
+   - `android:showWhenLocked` needs API 27; `minSdk` is 24, so lint may warn
+2. Confirm at runtime that `NativeModules.KenIngestion` is defined. Log it.
+3. Grant notification access (Settings → Special app access) and SMS
+   permission in-app.
+4. **Emulator SMS test** — Android Studio → Extended Controls → Phone → SMS.
+   Send a real bank-shaped message. This drives the actual `SmsReceiver`, so
+   no real money is needed. Example body:
+   ```
+   Sent Rs.240.00 From HDFC Bank A/C x1234 To SWIGGY On 01/09/26 Ref 412345678901
+   ```
+5. **Dedupe test — the important one.** With both channels granted, make one
+   real ₹1 UPI payment on a physical device. Assert **exactly one** row
+   appears. If two appear, stop and fix dedupe before anything else;
+   double-counting destroys trust in every number in the app.
+6. Widget: place it, trigger an event, confirm it re-renders within ~1s.
+7. Capture latency: time mic tap → microphone live. Target <300ms. If it
+   exceeds ~800ms, something has pulled the React Native bridge onto the hot
+   path — that is a bug, not a tuning issue.
+
+**Done when:** an emulator SMS produces one correct transaction, the widget
+shows it, and a voice note attaches to it.
+
+**Also:** add a fixture to `src/ingestion/__fixtures__/events.ts` for every
+real message shape you encounter, especially any that parse wrong. Bugs get a
+fixture *before* the fix.
+
+---
+
+## TASK B — Persistence (unblocked; do this even with no SDK)
+
+**Goal:** transactions survive app restart.
+
+**Why:** currently `useTransactionStore` seeds from `mockTransactions` every
+launch. Even with capture working perfectly, every payment and voice note is
+lost on restart. This makes the app unusable for its actual purpose, and it is
+far cheaper to build before real data exists than after.
+
+**Approach**
+1. Add `expo-sqlite`. Create `src/store/database.ts` owning schema and
+   migrations.
+2. Schema mirrors the `Transaction` interface in `src/types/transaction.ts`.
+   - `amount_minor INTEGER NOT NULL` — never REAL
+   - `UNIQUE(dedupe_key)` so double-counting is caught by the database, not
+     only by app logic
+   - Index on `status` (the queue filters on it constantly)
+3. Hydrate the Zustand store from SQLite on launch; write through on every
+   mutation. Keep Zustand as the single source of truth in memory —
+   **do not** introduce a second store.
+4. Replace the `mockTransactions` seed with an empty initial state plus a
+   dev-only "load sample data" action. Shipping mock rows to a real user is a
+   correctness bug.
+5. Write a migration path now, while there is no real data to lose.
+
+**Tests to add** (`src/store/database.test.ts`):
+- Round-trip: write a transaction, read it back, every field survives
+- `amountMinor` stays an integer through the round trip
+- The `dedupe_key` UNIQUE constraint actually rejects a duplicate
+- Queue ordering is preserved after reload
+
+**Done when:** add a transaction, kill the app, reopen — it is still there.
+`npm run typecheck` and `npm test` pass.
+
+---
+
+## TASK C — Merchant memory (kills most of the categorization tedium)
+
+**Goal:** categorize `Swiggy` once, and every future Swiggy is automatic.
+
+**Why before any LLM:** this is free, instant, offline, and after a few weeks
+covers the large majority of transactions. Reaching for a model first means
+paying per call for what a lookup table solves.
+
+1. `merchants` table: normalized name → category, with a seen count.
+2. On note/category confirmation, upsert the mapping.
+3. On ingestion, look it up and pre-fill the category.
+4. Ship a starter dictionary of a few hundred common Indian merchants so the
+   app is not useless on day one.
+
+**Tests:** categorizing a merchant once applies it to the next transaction from
+the same merchant; a user override always beats the remembered value.
+
+---
+
+## TASK D — LLM categorization (only for genuinely new merchants)
+
+Read the `claude-api` skill before writing any of this — do not write Anthropic
+SDK calls from memory.
+
+- `claude-opus-5` via `@anthropic-ai/sdk` in the **Express layer**, not the app
+- Structured outputs (`output_config.format`), taxonomy prompt-cached
+- Route non-urgent backfill through the Batch API (50% cost)
+- Input is the voice transcript plus merchant; output is one of the 8
+  categories, never a new one
+- Decide the model tier with real data. `claude-haiku-4-5` is ~5x cheaper and
+  may be adequate for short-text classification — measure, do not assume
+
+---
+
+## TASK E — Backend and sync
+
+- Supabase: Postgres schema mirroring `Transaction`, phone-OTP auth, storage
+  bucket for audio
+- `amount_minor BIGINT` on the server too, with `UNIQUE(dedupe_key)`
+- Wire the existing Express server as the API layer
+- Sync queue with conflict handling; offline-first is non-negotiable because
+  SMS arrives with no network
+
+---
+
+## TASK F — Budgets and analytics (the reason to keep using it)
+
+- Monthly budget per category
+- **Burn rate vs. days remaining** — not "you spent ₹4,200" but "70% through
+  the month, 90% through the food budget"
+- **Safe-to-spend-today** — the one number people act on
+- Merchant leaderboard; recurring-subscription detection (same merchant, same
+  amount, ~30d cadence)
+- Weekly review notification to drain the pending-note backlog
+- **Search over transcripts** — "what did I spend on client meetings?" This is
+  what the voice notes uniquely unlock and no other tracker has it
+
+---
+
+## 6. Known issues (fix opportunistically, or as their own task)
+
+- **Replay-and-correct is half-built.** `SpeechRecognizer` takes exclusive hold
+  of the microphone on most devices, so the parallel `MediaRecorder` usually
+  fails and `audioPath` stays null. Editing the transcript works; replaying the
+  audio usually will not. The user asked for re-listen, so this is a real
+  partial miss. Fix is the cloud STT path (record with `expo-audio`, transcribe
+  server-side), which also fixes Hinglish accuracy — but that is a product
+  decision about cost and privacy, so **ask before switching**.
+- **Two allowlists must stay in sync.** `NotificationAllowlist.PACKAGES`
+  (Kotlin — privacy gate, what gets buffered) and
+  `NOTIFICATION_PACKAGE_ALLOWLIST` (TypeScript — correctness gate, what gets
+  parsed). Same list, different purposes. Consider generating one from the
+  other.
+- **Parse rules are hardcoded.** `plan.md` calls for a server-fetched versioned
+  rule pack so a new bank ships without an app release. Do this before real
+  users are on old versions.
+- **No historical backfill.** The app starts empty. `READ_SMS` allows querying
+  the inbox via `ContentResolver`; not implemented.
+- **`FloatingMic` predates the queue.** Audit it — notes can now attach to an
+  existing payment, and some paths may still create a new transaction instead.
+
+---
+
+## 7. Before anyone outside the team installs this
+
+- Privacy policy — required for both the SMS declaration and notification
+  access, and it must be truthful about what leaves the device
+- Play Console permissions declaration for SMS. **Expect rejection:** the
+  permitted-use list covers UPI transaction *verification*, not expense
+  tracking. The notification path was designed to survive that outcome — so
+  confirm the app is genuinely usable with `READ_SMS` removed
+- Full first-run onboarding (the setup card exists; the flow does not)
+- Redaction audit: confirm no raw message text is sent anywhere
+
+---
+
+## 8. Finishing a session
+
+Before you stop:
+
+1. `npm run typecheck` and `npm test` both pass
+2. `CONTEXT.md` updated if implementation state changed
+3. `plan.md` updated if you deviated from the architecture — and say why
+4. **This file updated**: tick off what you finished, add what you discovered,
+   correct anything you found to be wrong. The next agent reads this file and
+   nothing else.
+5. Commit on a branch (`feat/…`, `fix/…`) with a message explaining *why*, not
+   just what
+6. In your final report, separate **what you verified by running it** from
+   **what you only wrote**
