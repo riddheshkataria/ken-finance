@@ -82,6 +82,7 @@ export default function App() {
   const skipInQueue = useTransactionStore((state) => state.skipInQueue);
   const ignoreTransaction = useTransactionStore((state) => state.ignoreTransaction);
   const attachNote = useTransactionStore((state) => state.attachNote);
+  const categorizePending = useTransactionStore((state) => state.categorizePending);
   const updateTransaction = useTransactionStore((state) => state.updateTransaction);
 
   // The transaction whose category the user is changing. Setting one teaches
@@ -115,6 +116,12 @@ export default function App() {
         audioPath: null,
       });
       setNotingTransaction(null);
+
+      // A note is exactly what lets the model beat the keyword guess, so this
+      // is the moment the paid tier is most likely to earn its cost. Not
+      // awaited: the confirmation should not wait on a network round trip.
+      void categorizePending();
+
       Alert.alert(
         'Note added',
         `${formatINR(notingTransaction.amountMinor)} · ${notingTransaction.paidTo}\n\n"${transcription}"`,

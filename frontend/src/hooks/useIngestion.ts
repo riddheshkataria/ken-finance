@@ -140,6 +140,11 @@ export function useIngestion(): UseIngestionResult {
     store.retireStaleQueueItems();
 
     await pushQueueToWidget();
+
+    // Last tier, and the only one that costs money — it self-filters to
+    // merchants the free tiers could not answer, and is fire-and-forget so a
+    // slow or absent backend never delays the widget update above.
+    void store.categorizePending();
   }, [available, pushQueueToWidget]);
 
   useEffect(() => {

@@ -200,6 +200,32 @@ without it the memory could never fill up.
 
 ---
 
+### G. LLM categorization (`backend/src/categorize.js`, `merchants/llmCategorizer.ts`)
+
+The third and only paid tier, reached when user memory and the dictionary have
+both missed. Everything about it is shaped around calling it rarely:
+
+- `selectNeedingLlm` filters to `source: 'none'` **and** requires a note —
+  with no note the model has nothing the regex did not already have.
+- Requests are batched (one round trip for up to 50), and the taxonomy system
+  prompt is `cache_control`-cached, so most input cost becomes a cache read.
+- `effort: 'low'` — classification does not need deliberation.
+- Only **high-confidence** answers are written into merchant memory.
+  Remembering a guess would let one model mistake apply to every future
+  payment to that merchant, and memory outranks the dictionary so it could
+  override a correct shipped answer.
+
+The client re-validates every returned category against the enum, so a drift
+between the backend's copy of the list and the frontend's degrades to
+"uncategorised" rather than corrupting data. Failure at any point returns an
+empty result: a missing category costs one tap, a thrown error would break
+ingestion.
+
+Runs without a key — `/api/categorize` returns 503 and the app falls back to
+asking the user, which is what merchant memory learns from anyway.
+
+---
+
 ## 6. Current Status
 
 All of the below is merged to `main`.
@@ -213,9 +239,10 @@ All of the below is merged to `main`.
 | Native module (Kotlin) | Written, **never compiled** — no Android SDK on the authoring machine |
 | Widget + voice capture | Written, **never run** |
 | Persistence | Done — SQLite, write-through, 20 tests (schema v2) |
-| Backend / Supabase | Not started — Express has a health route only |
+| Backend | Express + POST /api/categorize. No database, no auth, no sync |
+| Supabase | Not started |
 | Merchant memory | Done — 19 tests |
-| LLM categorization | Not started |
+| LLM categorization | Done — 13 tests. Endpoint verified; a real Claude call has never run (no API key here) |
 | Budgets & analytics | Not started |
 
 ### The honest summary
@@ -233,8 +260,8 @@ like it is working while capturing nothing — check this explicitly rather than
 inferring from the UI.
 
 **Next steps:** see `todo_next.md`. In short — compile the Kotlin if you have an
-Android SDK; otherwise the next unblocked work is the LLM fallback for
-merchants that neither the dictionary nor user memory knows (Task D).
+Android SDK; otherwise the next unblocked work is budgets and analytics
+(Task F), which is what makes the captured notes worth having.
 
 ## 7. Guidelines for Agents & Teammates
 

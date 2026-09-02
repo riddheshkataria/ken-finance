@@ -15,6 +15,12 @@ import {
 } from './database';
 import { persistDiff } from './persistence';
 import { useMerchantStore } from './useMerchantStore';
+import {
+  requestCategories,
+  selectNeedingLlm,
+  shouldRemember,
+} from '../merchants/llmCategorizer';
+import { API_BASE_URL, LLM_CATEGORIZATION_ENABLED } from '../config';
 import type { IngestionEvent } from '../ingestion/types';
 import {
   selectCaptureTarget,
@@ -57,6 +63,13 @@ interface TransactionState {
   // --- Bulk ---
   reconcileAll: () => number;
   setTransactions: (transactions: Transaction[]) => void;
+
+  // --- LLM categorization (last tier, costs money) ---
+  /**
+   * Categorises transactions neither user memory nor the dictionary knows.
+   * Returns how many were categorised.
+   */
+  categorizePending: () => Promise<number>;
 
   // --- Persistence ---
   /** True once hydration from SQLite has finished (or failed). */
@@ -244,6 +257,46 @@ export const useTransactionStore = create<TransactionState>((set, get) => ({
   },
 
   setTransactions: (transactions) => set({ transactions }),
+
+  categorizePending: async () => {
+    if (!LLM_CATEGORIZATION_ENABLED) return 0;
+
+    const merchants = useMerchantStore.getState();
+
+    // The cost control: only what the two free tiers could not answer.
+    const candidates = selectNeedingLlm(get().transactions, merchants.memory);
+    if (candidates.length === 0) return 0;
+
+    const suggestions = await requestCategories(candidates, {
+      baseUrl: API_BASE_URL,
+    });
+    if (suggestions.length === 0) return 0;
+
+    const byId = new Map(suggestions.map((item) => [item.id, item]));
+
+    set((state) => ({
+      transactions: state.transactions.map((transaction) => {
+        const suggestion = byId.get(transaction.id);
+        return suggestion
+          ? { ...transaction, category: suggestion.category }
+          : transaction;
+      }),
+    }));
+
+    // Only high-confidence answers become memory. Remembering a guess would
+    // let one model mistake apply to every future payment to that merchant,
+    // and memory outranks the dictionary so it could override a correct
+    // shipped answer. A user correction always overwrites either way.
+    for (const suggestion of suggestions) {
+      if (!shouldRemember(suggestion)) continue;
+      const transaction = get().getTransactionById(suggestion.id);
+      if (transaction) {
+        merchants.learn(transaction.paidTo, suggestion.category);
+      }
+    }
+
+    return suggestions.length;
+  },
 
   hydrate: async () => {
     if (get().hydrated) return;
