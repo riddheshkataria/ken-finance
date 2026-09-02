@@ -226,6 +226,37 @@ asking the user, which is what merchant memory learns from anyway.
 
 ---
 
+### H. Budgets & analytics (`analytics/`, `store/useBudgetStore.ts`, `components/InsightsPanel.tsx`)
+
+Pure selectors over the transaction list; nothing here is stored state except
+the budgets themselves.
+
+The framing throughout: "you spent ₹4,200" is a fact the user already knows,
+so every number here is one they can act on instead.
+
+- **Safe to spend today** — remaining budget divided by remaining days.
+  Divisions floor rather than round: telling someone they can spend ₹1 more
+  than they can is the one rounding direction that costs them.
+- **Overpacing** — 90% of the food budget is fine on the 28th and a problem on
+  the 10th, so spend fraction is compared against period fraction rather than
+  against the limit alone.
+- **Recurring detection** requires three occurrences and regular gaps. Two
+  identical payments to one merchant is a coincidence often enough that a
+  false "you have a subscription" would be worse than missing a real one.
+- **Transcript search** is the thing no other tracker can do — "client
+  meeting" appears in no bank message, only in what the user said while
+  paying.
+
+Periods use local time deliberately: a budget month is the calendar month the
+user experiences, and a UTC boundary would silently move 31 January's spending
+into February.
+
+Credits and `ignored` transactions are excluded from all spend maths; ignored
+is usually a transfer to self, which would otherwise inflate every total for
+money that never left the user's control.
+
+---
+
 ## 6. Current Status
 
 All of the below is merged to `main`.
@@ -243,7 +274,7 @@ All of the below is merged to `main`.
 | Supabase | Not started |
 | Merchant memory | Done — 19 tests |
 | LLM categorization | Done — 13 tests. Endpoint verified; a real Claude call has never run (no API key here) |
-| Budgets & analytics | Not started |
+| Budgets & analytics | Done — 28 tests (schema v3) |
 
 ### The honest summary
 
@@ -259,9 +290,9 @@ The trap most likely to mislead you: if `NativeModules.KenIngestion` is
 like it is working while capturing nothing — check this explicitly rather than
 inferring from the UI.
 
-**Next steps:** see `todo_next.md`. In short — compile the Kotlin if you have an
-Android SDK; otherwise the next unblocked work is budgets and analytics
-(Task F), which is what makes the captured notes worth having.
+**Next steps:** see `todo_next.md`. The remaining blocked work is Task A —
+compiling the Kotlin — which needs a machine with the Android SDK. Everything
+that can be built without a device is done.
 
 ## 7. Guidelines for Agents & Teammates
 

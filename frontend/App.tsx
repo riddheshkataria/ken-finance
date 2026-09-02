@@ -18,6 +18,8 @@ import { FloatingMic } from './src/components/FloatingMic';
 import { IngestionSetupCard } from './src/components/IngestionSetupCard';
 import { PendingQueueBanner } from './src/components/PendingQueueBanner';
 import { CategoryPicker } from './src/components/CategoryPicker';
+import { InsightsPanel } from './src/components/InsightsPanel';
+import { useBudgetStore } from './src/store/useBudgetStore';
 import { Transaction, TransactionCategory } from './src/types/transaction';
 
 import { parseVoiceToTransaction } from './src/utils/voiceParser';
@@ -66,6 +68,10 @@ export default function App() {
   );
 
   const hydrateMerchants = useMerchantStore((state) => state.hydrate);
+  const hydrateBudgets = useBudgetStore((state) => state.hydrate);
+  const budgets = useBudgetStore((state) => state.budgets);
+  const setBudget = useBudgetStore((state) => state.setBudget);
+  const [showInsights, setShowInsights] = useState(false);
 
   // Load persisted state before anything else renders meaningfully. Merchant
   // memory must be loaded before ingestion runs, or the first captured
@@ -73,7 +79,8 @@ export default function App() {
   useEffect(() => {
     void hydrate();
     void hydrateMerchants();
-  }, [hydrate, hydrateMerchants]);
+    void hydrateBudgets();
+  }, [hydrate, hydrateMerchants, hydrateBudgets]);
 
   // Both ingestion channels run concurrently and write straight into the
   // store; dedupe in ingestion/dedupe.ts keeps one payment as one row.
@@ -231,6 +238,15 @@ export default function App() {
               <Text style={styles.appName}>Ken Finance</Text>
               <Text style={styles.appSubtitle}>Smart Voice & SMS Finance Manager</Text>
             </View>
+            <View style={styles.headerActions}>
+            <TouchableOpacity
+              style={styles.insightsButton}
+              onPress={() => setShowInsights(true)}
+              accessibilityLabel="Open budgets and insights"
+            >
+              <Ionicons name="stats-chart" size={16} color="#FFFFFF" />
+              <Text style={styles.insightsButtonText}>Insights</Text>
+            </TouchableOpacity>
             <TouchableOpacity
               style={styles.resetButton}
               onPress={() => {
@@ -248,8 +264,8 @@ export default function App() {
               }}
             >
               <Ionicons name="refresh" size={16} color="#4B5563" />
-              <Text style={styles.resetButtonText}>Reset Data</Text>
             </TouchableOpacity>
+            </View>
           </View>
 
           {/* Overview Balance Cards */}
@@ -347,6 +363,14 @@ export default function App() {
           {/* Floating Mic with Live Streaming & Press-and-Hold */}
           <FloatingMic onTranscriptionComplete={handleVoiceComplete} />
 
+          <InsightsPanel
+            visible={showInsights}
+            transactions={transactions}
+            budgets={budgets}
+            onSetBudget={setBudget}
+            onClose={() => setShowInsights(false)}
+          />
+
           <CategoryPicker
             transaction={categorising}
             onDismiss={() => setCategorising(null)}
@@ -391,6 +415,25 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#64748B',
     marginTop: 2,
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  insightsButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: '#0F172A',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  insightsButtonText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '700',
   },
   resetButton: {
     flexDirection: 'row',

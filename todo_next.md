@@ -33,7 +33,7 @@ that** — do not start work on top of a broken baseline.
 cd frontend
 npm install
 npm run typecheck   # must print nothing
-npm test            # must report 78+ pass, 0 fail
+npm test            # must report 106+ pass, 0 fail
 ```
 
 Both are also your definition of done for every task below. Never commit with
@@ -66,7 +66,11 @@ levels of trust.
 - **LLM categorization** (`backend/src/categorize.js`,
   `src/merchants/llmCategorizer.ts`) — last tier, batched, cached, and gated
   so it only runs for merchants the free tiers could not answer.
-- 78 tests across `src/ingestion/`, `src/store/` and `src/merchants/`.
+- **Budgets & analytics** (`src/analytics/`, `store/useBudgetStore.ts`,
+  `components/InsightsPanel.tsx`) — safe-to-spend-today, overpacing warnings,
+  merchant leaderboard, recurring detection, transcript search.
+- 106 tests across `src/ingestion/`, `src/store/`, `src/merchants/` and
+  `src/analytics/`.
 
 ### Written but NEVER COMPILED — do not trust it
 Everything in `frontend/modules/ken-ingestion/` (~900 lines of Kotlin): SMS
@@ -83,7 +87,6 @@ the machine where it was written. **It has never been through a compiler.**
 ### Does not exist
 - Supabase, auth, sync. The backend is Express with one categorisation
   endpoint and no database.
-- Budgets, analytics, history views.
 
 ### The honest summary
 Parsing through storage is solid. The step before all of it — capture — is
@@ -134,9 +137,11 @@ ls "$LOCALAPPDATA/Android/Sdk" 2>/dev/null
 ```
 
 - **SDK present** → do **TASK A** first (it unblocks everything).
-- **No SDK** → skip TASK A, start at **TASK F** (B, C and D are done; E is
-  optional). Say in your report that A was skipped and why. Do not attempt to
-  install an SDK unprompted.
+- **No SDK** → **everything buildable without a device is done.** B, C, D and
+  F are complete; only E (backend/Supabase sync) remains optional. The
+  honest answer is that the project now needs a Gradle build more than it
+  needs more features — say so rather than inventing work. If you must
+  proceed, TASK E or the open items in section 6 are the useful targets.
 
 ---
 
@@ -287,17 +292,30 @@ may be adequate. Decide with data, not upfront.
 
 ---
 
-## TASK F — Budgets and analytics ← **START HERE if you have no Android SDK**
+## TASK F — Budgets and analytics ✅ DONE
 
-- Monthly budget per category
-- **Burn rate vs. days remaining** — not "you spent ₹4,200" but "70% through
-  the month, 90% through the food budget"
-- **Safe-to-spend-today** — the one number people act on
-- Merchant leaderboard; recurring-subscription detection (same merchant, same
-  amount, ~30d cadence)
-- Weekly review notification to drain the pending-note backlog
-- **Search over transcripts** — "what did I spend on client meetings?" This is
-  what the voice notes uniquely unlock and no other tracker has it
+Merged to `main`. `src/analytics/` (pure selectors), `store/useBudgetStore.ts`
+(schema v3), `components/InsightsPanel.tsx`.
+
+Delivered: safe-to-spend-today, overpacing warnings, per-category budget bars
+with a month-pace marker, merchant leaderboard, recurring-payment detection,
+and transcript search.
+
+**Three decisions not to casually reverse:**
+
+1. **Safe-to-spend floors, never rounds.** Suggesting ₹1 more than the user
+   has is the one rounding direction that actually costs them.
+2. **Recurring needs three occurrences and regular gaps.** Two identical
+   payments to one merchant is a coincidence often enough; a false "you have a
+   subscription" is worse than missing a real one.
+3. **Periods are local time, not UTC.** A budget month is the calendar month
+   the user experiences — a UTC boundary silently moves 31 January's spending
+   into February, and the resulting wrong totals are near-impossible to
+   explain.
+
+Open: no weekly review notification yet (it would be the natural moment to
+drain the pending-note backlog), and analytics cover the current month only —
+no month-over-month comparison.
 
 ---
 
