@@ -16,9 +16,10 @@ import type {
   TransactionStatus,
   TransactionType,
 } from '../types/transaction';
+import type { MerchantMemory } from '../merchants/lookup';
 
 /** Bumped whenever MIGRATIONS gains an entry. */
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 /**
  * Ordered migrations, applied by PRAGMA user_version.
@@ -60,6 +61,20 @@ export const MIGRATIONS: readonly string[] = [
   // The queue filters on status constantly, and history sorts by time.
   `CREATE INDEX IF NOT EXISTS idx_transactions_status ON transactions (status);`,
   `CREATE INDEX IF NOT EXISTS idx_transactions_timestamp ON transactions (timestamp DESC);`,
+
+  // v2 — merchant memory. What the user has taught us about a merchant, so
+  // categorising one once applies to every later payment to it.
+  `
+  CREATE TABLE IF NOT EXISTS merchants (
+    -- Normalised lookup key from merchants/normalize.ts. Never the raw name:
+    -- the same shop arrives spelled four different ways depending on channel.
+    key          TEXT PRIMARY KEY NOT NULL,
+    display_name TEXT NOT NULL,
+    category     TEXT NOT NULL,
+    seen_count   INTEGER NOT NULL DEFAULT 1,
+    updated_at   TEXT NOT NULL
+  );
+  `,
 ];
 
 /** A row exactly as SQLite stores it. */
@@ -128,6 +143,50 @@ export const SELECT_ALL_SQL =
 export const DELETE_TRANSACTION_SQL = 'DELETE FROM transactions WHERE id = ?;';
 
 export const DELETE_ALL_SQL = 'DELETE FROM transactions;';
+
+// --- Merchant memory -----------------------------------------------------
+
+export interface MerchantRow {
+  key: string;
+  display_name: string;
+  category: string;
+  seen_count: number;
+  updated_at: string;
+}
+
+export const SELECT_MERCHANTS_SQL = 'SELECT * FROM merchants;';
+
+export const UPSERT_MERCHANT_SQL = `
+INSERT INTO merchants (key, display_name, category, seen_count, updated_at)
+VALUES (?, ?, ?, ?, ?)
+ON CONFLICT(key) DO UPDATE SET
+  display_name = excluded.display_name,
+  category = excluded.category,
+  seen_count = excluded.seen_count,
+  updated_at = excluded.updated_at;
+`;
+
+export const DELETE_ALL_MERCHANTS_SQL = 'DELETE FROM merchants;';
+
+export function merchantToBindParams(memory: MerchantMemory): unknown[] {
+  return [
+    memory.key,
+    memory.displayName,
+    memory.category,
+    memory.seenCount,
+    memory.updatedAt,
+  ];
+}
+
+export function merchantFromRow(row: MerchantRow): MerchantMemory {
+  return {
+    key: row.key,
+    displayName: row.display_name,
+    category: row.category as TransactionCategory,
+    seenCount: row.seen_count,
+    updatedAt: row.updated_at,
+  };
+}
 
 /**
  * Converts a transaction into positional bind parameters.

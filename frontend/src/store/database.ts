@@ -12,16 +12,23 @@
 import * as SQLite from 'expo-sqlite';
 import type { Transaction } from '../types/transaction';
 import {
+  DELETE_ALL_MERCHANTS_SQL,
   DELETE_ALL_SQL,
   DELETE_TRANSACTION_SQL,
   MIGRATIONS,
   SELECT_ALL_SQL,
   SCHEMA_VERSION,
   UPSERT_TRANSACTION_SQL,
+  SELECT_MERCHANTS_SQL,
+  UPSERT_MERCHANT_SQL,
   fromRow,
+  merchantFromRow,
+  merchantToBindParams,
   toBindParams,
+  type MerchantRow,
   type TransactionRow,
 } from './schema';
+import type { MerchantMemory } from '../merchants/lookup';
 
 const DATABASE_NAME = 'ken-finance.db';
 
@@ -154,6 +161,43 @@ export async function deleteAllTransactions(): Promise<void> {
     await database.runAsync(DELETE_ALL_SQL);
   } catch (error) {
     console.warn('[ken] Failed to clear transactions', error);
+  }
+}
+
+// --- Merchant memory -----------------------------------------------------
+
+export async function loadMerchants(): Promise<MerchantMemory[]> {
+  if (!database) return [];
+
+  try {
+    const rows = await database.getAllAsync<MerchantRow>(SELECT_MERCHANTS_SQL);
+    return rows.map(merchantFromRow);
+  } catch (error) {
+    console.warn('[ken] Failed to load merchant memory', error);
+    return [];
+  }
+}
+
+export async function saveMerchant(memory: MerchantMemory): Promise<void> {
+  if (!database) return;
+
+  try {
+    await database.runAsync(
+      UPSERT_MERCHANT_SQL,
+      merchantToBindParams(memory) as SQLite.SQLiteBindValue[],
+    );
+  } catch (error) {
+    console.warn('[ken] Failed to save merchant memory', memory.key, error);
+  }
+}
+
+export async function deleteAllMerchants(): Promise<void> {
+  if (!database) return;
+
+  try {
+    await database.runAsync(DELETE_ALL_MERCHANTS_SQL);
+  } catch (error) {
+    console.warn('[ken] Failed to clear merchant memory', error);
   }
 }
 

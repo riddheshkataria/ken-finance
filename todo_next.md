@@ -33,7 +33,7 @@ that** — do not start work on top of a broken baseline.
 cd frontend
 npm install
 npm run typecheck   # must print nothing
-npm test            # must report 46+ pass, 0 fail
+npm test            # must report 65+ pass, 0 fail
 ```
 
 Both are also your definition of done for every task below. Never commit with
@@ -59,7 +59,11 @@ levels of trust.
   SQLite, write-through, hydrates at app start. `amount_minor` is `INTEGER`
   and `dedupe_key` is `UNIQUE`, so the database itself rejects a
   double-counted payment.
-- 46 tests across `src/ingestion/` and `src/store/`.
+- **Merchant memory** (`src/merchants/`, `src/store/useMerchantStore.ts`) —
+  user memory beats the shipped dictionary, both beat guessing. Normalisation
+  collapses the four channel spellings of a merchant to one key without
+  merging genuinely different businesses.
+- 65 tests across `src/ingestion/`, `src/store/` and `src/merchants/`.
 
 ### Written but NEVER COMPILED — do not trust it
 Everything in `frontend/modules/ken-ingestion/` (~900 lines of Kotlin): SMS
@@ -75,7 +79,7 @@ the machine where it was written. **It has never been through a compiler.**
 
 ### Does not exist
 - Backend (Express is a health route only), Supabase, sync.
-- Merchant memory, LLM categorization.
+- LLM categorization.
 - Budgets, analytics, history views.
 
 ### The honest summary
@@ -127,9 +131,9 @@ ls "$LOCALAPPDATA/Android/Sdk" 2>/dev/null
 ```
 
 - **SDK present** → do **TASK A** first (it unblocks everything).
-- **No SDK** → skip TASK A, start at **TASK C** (B is already done). Say in
-  your report that A was skipped and why. Do not attempt to install an SDK
-  unprompted.
+- **No SDK** → skip TASK A, start at **TASK D** (B and C are already done).
+  Say in your report that A was skipped and why. Do not attempt to install an
+  SDK unprompted.
 
 ---
 
@@ -211,26 +215,38 @@ error would surface.
 
 ---
 
-## TASK C — Merchant memory ← **START HERE if you have no Android SDK**
+## TASK C — Merchant memory ✅ DONE
 
-**Goal:** categorize `Swiggy` once, and every future Swiggy is automatic.
+Merged to `main`. Categorise a merchant once and every later payment to it is
+automatic. Three tiers: **user memory → shipped dictionary → null**.
 
-**Why before any LLM:** this is free, instant, offline, and after a few weeks
-covers the large majority of transactions. Reaching for a model first means
-paying per call for what a lookup table solves.
+Files: `src/merchants/normalize.ts`, `dictionary.ts`, `lookup.ts`, and
+`src/store/useMerchantStore.ts`. Learning hangs off `updateTransaction`, and
+`CategoryPicker` is what makes correcting a category reachable in the UI.
 
-1. `merchants` table: normalized name → category, with a seen count.
-2. On note/category confirmation, upsert the mapping.
-3. On ingestion, look it up and pre-fill the category.
-4. Ship a starter dictionary of a few hundred common Indian merchants so the
-   app is not useless on day one.
+**Before you touch normalisation, understand the two-sided constraint.** It is
+the whole reason this works:
 
-**Tests:** categorizing a merchant once applies it to the next transaction from
-the same merchant; a user override always beats the remembered value.
+- **Normalise too little** and memory never hits — `swiggy@ybl`,
+  `UPI/SWGY*ORDER/123456`, `SWIGGY LIMITED` and `Swiggy` are all the same shop
+  and must collapse to one key.
+- **Normalise too much** and distinct businesses merge — `Swiggy` (Dining) and
+  `Swiggy Instamart` (Grocery) must stay separate, or every grocery run is
+  silently filed as a restaurant.
+
+`AMBIGUOUS_PREFIXES` in `dictionary.ts` exists for the same reason: a bare
+prefix match must never decide a category on its own.
+
+Open here: the dictionary is ~150 merchants and hand-maintained. Growing it is
+cheap, useful, and safe — add entries with their normalised key, lowercase.
 
 ---
 
-## TASK D — LLM categorization (only for genuinely new merchants)
+## TASK D — LLM categorization ← **START HERE if you have no Android SDK**
+
+Only for merchants that neither user memory nor the dictionary knows. Check
+`resolveCategory` returns `source: 'none'` before spending a call — most
+transactions should never reach this tier.
 
 Read the `claude-api` skill before writing any of this — do not write Anthropic
 SDK calls from memory.
