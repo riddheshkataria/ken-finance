@@ -1,4 +1,5 @@
 import type { Transaction, TransactionCategory, TransactionType } from '../types/transaction';
+import { rupeesToPaise } from './money';
 
 /**
  * Category keyword mappings with weighted priority
@@ -65,13 +66,16 @@ function toTitleCase(str: string): string {
 }
 
 /**
- * Extracts numeric amount handling "k" (thousands), commas, currency symbols, and decimals.
+ * Extracts the spoken amount as integer paise (rules.md §1).
+ * Handles "k"/thousand, commas, currency symbols and decimals.
+ * People speak rupees ("650", "1.5k"), so conversion happens here — this is
+ * the boundary where a human-supplied rupee figure enters the system.
  */
-function extractAmount(transcript: string): number {
+function extractAmountMinor(transcript: string): number {
   // Check for expressions like "3k", "1.5k", "3 thousand"
   const kMatch = transcript.match(/(?:rs\.?|inr|₹|\$)?\s*(\d+(?:\.\d+)?)\s*(?:k|thousand)\b/i);
   if (kMatch) {
-    return Math.round(parseFloat(kMatch[1]) * 1000);
+    return rupeesToPaise(parseFloat(kMatch[1]) * 1000);
   }
 
   // Check for numbers (with optional commas/decimals and optional currency prefix/suffix)
@@ -80,7 +84,7 @@ function extractAmount(transcript: string): number {
     const rawNum = match[1].replace(/,/g, '');
     const val = parseFloat(rawNum);
     if (!isNaN(val) && val > 0) {
-      return val;
+      return rupeesToPaise(val);
     }
   }
 
@@ -188,7 +192,7 @@ function extractTransactionType(transcript: string): TransactionType {
 export function parseVoiceToTransaction(transcript: string): Partial<Transaction> {
   if (!transcript || typeof transcript !== 'string') {
     return {
-      amount: 0,
+      amountMinor: 0,
       title: 'Voice Transaction',
       category: 'Others',
       paidTo: 'Unknown Merchant',
@@ -200,14 +204,14 @@ export function parseVoiceToTransaction(transcript: string): Partial<Transaction
   }
 
   const trimmed = transcript.trim();
-  const amount = extractAmount(trimmed);
+  const amountMinor = extractAmountMinor(trimmed);
   const category = extractCategory(trimmed);
   const paidTo = extractPaidTo(trimmed);
   const title = extractTitle(trimmed, paidTo, category);
   const transactionType = extractTransactionType(trimmed);
 
   return {
-    amount,
+    amountMinor,
     title,
     category,
     paidTo,

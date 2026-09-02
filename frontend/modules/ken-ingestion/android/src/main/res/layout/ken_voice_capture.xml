@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="@drawable/ken_sheet_bg"
+    android:orientation="vertical"
+    android:padding="24dp">
+
+    <TextView
+        android:id="@+id/capture_status"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textColor="#FF111827"
+        android:textSize="18sp"
+        android:textStyle="bold" />
+
+    <!--
+      Always shown once recognition settles. On-device transcription is weak
+      on Hinglish and merchant names, so correcting the text is part of the
+      normal flow rather than an error path.
+    -->
+    <EditText
+        android:id="@+id/capture_transcript"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        android:autofillHints=""
+        android:hint="@string/ken_what_was_this_for"
+        android:inputType="textCapSentences|textMultiLine"
+        android:minLines="2"
+        android:textColor="#FF111827"
+        android:textSize="16sp"
+        android:visibility="gone" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="20dp"
+        android:gravity="end"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/capture_dismiss"
+            style="?android:attr/borderlessButtonStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/ken_dismiss" />
+
+        <Button
+            android:id="@+id/capture_retry"
+            style="?android:attr/borderlessButtonStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/ken_retry"
+            android:visibility="gone" />
+
+        <Button
+            android:id="@+id/capture_save"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:text="@string/ken_save"
+            android:visibility="gone" />
+    </LinearLayout>
+
+</LinearLayout>

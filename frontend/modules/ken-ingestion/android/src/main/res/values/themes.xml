@@ -1,0 +1,14 @@
+<resources>
+    <!--
+      Translucent so the capture sheet floats over whatever is on screen,
+      making a widget tap feel like an overlay rather than an app launch.
+    -->
+    <style name="KenTranslucentTheme" parent="@android:style/Theme.Material.Dialog.NoActionBar">
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowContentOverlay">@null</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:backgroundDimEnabled">true</item>
+        <item name="android:windowCloseOnTouchOutside">true</item>
+    </style>
+</resources>

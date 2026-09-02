@@ -1,0 +1,29 @@
+<resources>
+    <string name="ken_listener_label">Ken Finance payment capture</string>
+    <string name="ken_channel_name">Payments awaiting a note</string>
+    <string name="ken_channel_description">Asks what a payment was for, moments after it happens.</string>
+
+    <string name="ken_unknown_merchant">Unknown merchant</string>
+    <string name="ken_all_caught_up">All caught up</string>
+    <string name="ken_tap_to_log">Tap the mic to log</string>
+    <string name="ken_more_to_log">+%1$d more to log</string>
+    <string name="ken_what_was_this_for">What was this for?</string>
+    <string name="ken_add_note">Add note</string>
+    <string name="ken_skip">Skip</string>
+    <string name="ken_notif_title_parsed">%1$s to %2$s</string>
+
+    <string name="ken_listening">Listening…</string>
+    <string name="ken_confirm_note">Check the note, then save</string>
+    <string name="ken_type_instead">Didn\'t catch that — type it instead</string>
+    <string name="ken_didnt_catch">Didn\'t catch that</string>
+    <string name="ken_no_recognizer">Speech recognition unavailable</string>
+    <string name="ken_mic_denied">Microphone denied — type the note instead</string>
+    <string name="ken_save">Save</string>
+    <string name="ken_retry">Retry</string>
+    <string name="ken_dismiss">Dismiss</string>
+
+    <plurals name="ken_new_payments">
+        <item quantity="one">%d new payment</item>
+        <item quantity="other">%d new payments</item>
+    </plurals>
+</resources>

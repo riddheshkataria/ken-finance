@@ -14,10 +14,14 @@ import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
 import { useTransactionStore } from './src/store/useTransactionStore';
 import { FloatingMic } from './src/components/FloatingMic';
+import { IngestionSetupCard } from './src/components/IngestionSetupCard';
+import { PendingQueueBanner } from './src/components/PendingQueueBanner';
 import { Transaction, TransactionCategory } from './src/types/transaction';
 
 import { parseVoiceToTransaction } from './src/utils/voiceParser';
-import { useSmsListener } from './src/hooks/useSmsListener';
+import { useIngestion } from './src/hooks/useIngestion';
+import { selectPendingQueue } from './src/store/queue';
+import { formatINR, sumPaise } from './src/utils/money';
 
 const getCategoryColor = (category: TransactionCategory) => {
   switch (category) {
@@ -45,61 +49,64 @@ export default function App() {
   const {
     transactions,
     addTransaction,
-    addSmsTransaction,
     deleteTransaction,
     resetToMock,
-    reconcileAll,
   } = useTransactionStore();
   const [lastVoicePrompt, setLastVoicePrompt] = useState<string | null>(null);
+  // The queue item the user is currently answering, if any. A voice note
+  // recorded while this is set attaches to that payment rather than creating
+  // a new standalone transaction.
+  const [notingTransaction, setNotingTransaction] = useState<Transaction | null>(
+    null,
+  );
 
-  // Hook to listen to Android Bank SMS notifications with auto-reconciliation
-  const { simulateIncomingSms, isListening } = useSmsListener({
-    onTransactionReceived: (parsedTx, rawSms) => {
-      const newTx: Transaction = {
-        id: `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
-        amount: parsedTx.amount ?? 0,
-        title: parsedTx.title ?? 'Bank SMS Transaction',
-        category: parsedTx.category ?? 'Others',
-        paidTo: parsedTx.paidTo ?? 'Merchant',
-        accountInfo: parsedTx.accountInfo ?? 'Bank Account',
-        transactionType: parsedTx.transactionType ?? 'Debit',
-        timestamp: parsedTx.timestamp ?? new Date().toISOString(),
-        source: 'SMS-parsed',
-      };
-
-      const result = addSmsTransaction(newTx);
-
-      if (result.matched && result.mergedTransaction) {
-        Alert.alert(
-          '✨ Transaction Reconciled & Merged!',
-          `Matched Voice log with Bank SMS (${rawSms.sender})!\n\nTitle: "${result.mergedTransaction.title}"\nAmount: ₹${result.mergedTransaction.amount}\nA/C: ${result.mergedTransaction.accountInfo}`
-        );
-      } else {
-        Alert.alert(
-          '💳 Bank SMS Logged',
-          `Sender: ${rawSms.sender}\nAmount: ₹${newTx.amount} (${newTx.category})\nA/C: ${newTx.accountInfo}`
-        );
-      }
-    },
-  });
+  // Both ingestion channels run concurrently and write straight into the
+  // store; dedupe in ingestion/dedupe.ts keeps one payment as one row.
+  const { available, permissions, requestSms, openNotificationSettings } =
+    useIngestion();
+  const skipInQueue = useTransactionStore((state) => state.skipInQueue);
+  const ignoreTransaction = useTransactionStore((state) => state.ignoreTransaction);
+  const attachNote = useTransactionStore((state) => state.attachNote);
+  const pendingQueue = useTransactionStore((state) =>
+    selectPendingQueue(state.transactions),
+  );
 
   // Calculate totals
-  const totalDebit = transactions
-    .filter((t) => t.transactionType === 'Debit')
-    .reduce((sum, t) => sum + t.amount, 0);
+  const totalDebit = sumPaise(
+    transactions.filter((t) => t.transactionType === 'Debit').map((t) => t.amountMinor),
+  );
 
-  const totalCredit = transactions
-    .filter((t) => t.transactionType === 'Credit')
-    .reduce((sum, t) => sum + t.amount, 0);
+  const totalCredit = sumPaise(
+    transactions.filter((t) => t.transactionType === 'Credit').map((t) => t.amountMinor),
+  );
 
   const netBalance = totalCredit - totalDebit;
 
   const handleVoiceComplete = (transcription: string) => {
     setLastVoicePrompt(transcription);
+
+    // Answering a queued payment attaches the note to it. Creating a second
+    // standalone transaction here would double-count the same spend, which is
+    // the failure mode the whole dedupe layer exists to prevent.
+    if (notingTransaction) {
+      attachNote(notingTransaction.id, {
+        text: transcription,
+        transcript: transcription,
+        audioPath: null,
+      });
+      setNotingTransaction(null);
+      Alert.alert(
+        'Note added',
+        `${formatINR(notingTransaction.amountMinor)} · ${notingTransaction.paidTo}\n\n"${transcription}"`,
+      );
+      return;
+    }
+
     const parsed = parseVoiceToTransaction(transcription);
+    const id = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
     const newTx: Transaction = {
-      id: `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
-      amount: parsed.amount ?? 0,
+      id,
+      amountMinor: parsed.amountMinor ?? 0,
       title: parsed.title ?? 'Voice Transaction',
       category: parsed.category ?? 'Others',
       paidTo: parsed.paidTo ?? 'Unknown Merchant',
@@ -107,11 +114,24 @@ export default function App() {
       transactionType: parsed.transactionType ?? 'Debit',
       timestamp: parsed.timestamp ?? new Date().toISOString(),
       source: 'Voice-only',
+      channel: 'voice',
+      refNo: null,
+      accountTail: null,
+      dedupeKey: `voice:${id}`,
+      rawPayload: transcription,
+      // A spoken note already carries its own context, so it is complete on
+      // arrival — it is bank events that land in the queue awaiting a note.
+      status: 'complete',
+      skippedCount: 0,
+      lastPromptedAt: null,
+      note: parsed.title ?? null,
+      transcript: transcription,
+      audioPath: null,
     };
     addTransaction(newTx);
     Alert.alert(
       'Transaction Logged via Voice',
-      `"${transcription}"\n\nAdded: ₹${newTx.amount} (${newTx.category} • ${newTx.transactionType})`
+      `"${transcription}"\n\nAdded: ${formatINR(newTx.amountMinor)} (${newTx.category} • ${newTx.transactionType})`
     );
   };
 
@@ -146,7 +166,7 @@ export default function App() {
           {/* Amount & Source */}
           <View style={styles.rightInfo}>
             <Text style={[styles.txAmount, isDebit ? styles.debitText : styles.creditText]}>
-              {isDebit ? '-' : '+'}₹{item.amount.toLocaleString('en-IN')}
+              {isDebit ? '-' : '+'}{formatINR(item.amountMinor)}
             </Text>
             <View style={styles.sourceTag}>
               <Text style={styles.sourceTagText}>{item.source}</Text>
@@ -194,25 +214,40 @@ export default function App() {
                   netBalance >= 0 ? styles.creditText : styles.debitText,
                 ]}
               >
-                {netBalance >= 0 ? '+' : ''}₹{netBalance.toLocaleString('en-IN')}
+                {netBalance >= 0 ? '+' : ''}{formatINR(netBalance)}
               </Text>
             </View>
             <View style={styles.subStatsRow}>
               <View style={styles.subStatBox}>
                 <Text style={styles.subStatLabel}>Total Spent</Text>
                 <Text style={[styles.subStatValue, styles.debitText]}>
-                  ₹{totalDebit.toLocaleString('en-IN')}
+                  {formatINR(totalDebit)}
                 </Text>
               </View>
               <View style={styles.subStatDivider} />
               <View style={styles.subStatBox}>
                 <Text style={styles.subStatLabel}>Total Income</Text>
                 <Text style={[styles.subStatValue, styles.creditText]}>
-                  ₹{totalCredit.toLocaleString('en-IN')}
+                  {formatINR(totalCredit)}
                 </Text>
               </View>
             </View>
           </View>
+
+          <IngestionSetupCard
+            available={available}
+            permissions={permissions}
+            onRequestSms={() => void requestSms()}
+            onOpenNotificationSettings={() => void openNotificationSettings()}
+          />
+
+          <PendingQueueBanner
+            head={pendingQueue[0] ?? null}
+            remaining={Math.max(0, pendingQueue.length - 1)}
+            onAddNote={(transaction) => setNotingTransaction(transaction)}
+            onSkip={(transaction) => skipInQueue(transaction.id)}
+            onIgnore={(transaction) => ignoreTransaction(transaction.id)}
+          />
 
           {/* Voice Feedback Banner */}
           {lastVoicePrompt && (
