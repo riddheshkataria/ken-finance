@@ -33,7 +33,7 @@ that** — do not start work on top of a broken baseline.
 cd frontend
 npm install
 npm run typecheck   # must print nothing
-npm test            # must report 27+ pass, 0 fail
+npm test            # must report 46+ pass, 0 fail
 ```
 
 Both are also your definition of done for every task below. Never commit with
@@ -55,7 +55,11 @@ levels of trust.
   first, then amount + account tail within 3 minutes.
 - **Pending-note queue** (`src/store/queue.ts`) — oldest first, skips sink,
   auto-retire after 3 skips or 7 days.
-- 27 tests in `src/ingestion/ingestion.test.ts`.
+- **Persistence** (`src/store/database.ts`, `schema.ts`, `persistence.ts`) —
+  SQLite, write-through, hydrates at app start. `amount_minor` is `INTEGER`
+  and `dedupe_key` is `UNIQUE`, so the database itself rejects a
+  double-counted payment.
+- 46 tests across `src/ingestion/` and `src/store/`.
 
 ### Written but NEVER COMPILED — do not trust it
 Everything in `frontend/modules/ken-ingestion/` (~900 lines of Kotlin): SMS
@@ -70,16 +74,14 @@ the machine where it was written. **It has never been through a compiler.**
 > Check this explicitly before concluding anything about capture.
 
 ### Does not exist
-- **Persistence.** `useTransactionStore` is in-memory, seeded from
-  `src/mock/transactions.ts` on every launch. Nothing survives restart.
 - Backend (Express is a health route only), Supabase, sync.
 - Merchant memory, LLM categorization.
 - Budgets, analytics, history views.
 
 ### The honest summary
-The middle of the core loop (parse → dedupe → queue) is solid. Both ends —
-capture and persistence — are unproven or absent. **No real payment has ever
-gone through this app end to end.**
+Parsing through storage is solid. The step before all of it — capture — is
+unproven, because the Kotlin has never been compiled. **No real payment has
+ever gone through this app end to end.**
 
 ---
 
@@ -125,8 +127,9 @@ ls "$LOCALAPPDATA/Android/Sdk" 2>/dev/null
 ```
 
 - **SDK present** → do **TASK A** first (it unblocks everything).
-- **No SDK** → skip TASK A, start at **TASK B**. Say in your report that A was
-  skipped and why. Do not attempt to install an SDK unprompted.
+- **No SDK** → skip TASK A, start at **TASK C** (B is already done). Say in
+  your report that A was skipped and why. Do not attempt to install an SDK
+  unprompted.
 
 ---
 
@@ -179,43 +182,36 @@ fixture *before* the fix.
 
 ---
 
-## TASK B — Persistence (unblocked; do this even with no SDK)
+## TASK B — Persistence ✅ DONE
 
-**Goal:** transactions survive app restart.
+SQLite via `expo-sqlite`, merged to `main`. Transactions survive restart.
 
-**Why:** currently `useTransactionStore` seeds from `mockTransactions` every
-launch. Even with capture working perfectly, every payment and voice note is
-lost on restart. This makes the app unusable for its actual purpose, and it is
-far cheaper to build before real data exists than after.
+Structure, so you extend it the same way:
+- `src/store/schema.ts` — **pure**: DDL, row mapping, bind-parameter order.
+  All of it is testable in plain Node, which is why the tests exist at all.
+- `src/store/database.ts` — connection and migrations only. Degrades to a
+  no-op if SQLite will not open, so the app runs in memory rather than
+  refusing to start.
+- `src/store/persistence.ts` — diffs successive store states, saves only what
+  changed. Wired as a `subscribe` at module scope.
 
-**Approach**
-1. Add `expo-sqlite`. Create `src/store/database.ts` owning schema and
-   migrations.
-2. Schema mirrors the `Transaction` interface in `src/types/transaction.ts`.
-   - `amount_minor INTEGER NOT NULL` — never REAL
-   - `UNIQUE(dedupe_key)` so double-counting is caught by the database, not
-     only by app logic
-   - Index on `status` (the queue filters on it constantly)
-3. Hydrate the Zustand store from SQLite on launch; write through on every
-   mutation. Keep Zustand as the single source of truth in memory —
-   **do not** introduce a second store.
-4. Replace the `mockTransactions` seed with an empty initial state plus a
-   dev-only "load sample data" action. Shipping mock rows to a real user is a
-   correctness bug.
-5. Write a migration path now, while there is no real data to lose.
+**Two things to know before you touch it:**
 
-**Tests to add** (`src/store/database.test.ts`):
-- Round-trip: write a transaction, read it back, every field survives
-- `amountMinor` stays an integer through the round trip
-- The `dedupe_key` UNIQUE constraint actually rejects a duplicate
-- Queue ordering is preserved after reload
+1. **Persistence is automatic.** Because it is a subscription diffing state,
+   any new store action is saved without you doing anything. Do not add
+   explicit save calls inside actions — you will get double writes.
+2. **Adding a column means adding a migration.** Append to `MIGRATIONS` and
+   bump `SCHEMA_VERSION` in `schema.ts`. **Never edit a migration that has
+   shipped** — it leaves installed devices on a different schema from new
+   ones, and nothing surfaces the difference until a query fails.
 
-**Done when:** add a transaction, kill the app, reopen — it is still there.
-`npm run typecheck` and `npm test` pass.
+Still open here: nothing verifies the SQL against a real SQLite engine, only
+the mapping around it. The first `expo run:android` is where a genuine DDL
+error would surface.
 
 ---
 
-## TASK C — Merchant memory (kills most of the categorization tedium)
+## TASK C — Merchant memory ← **START HERE if you have no Android SDK**
 
 **Goal:** categorize `Swiggy` once, and every future Swiggy is automatic.
 

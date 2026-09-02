@@ -157,6 +157,27 @@ cd backend && npm install && npm run dev   # Express on :5000
 
 ---
 
+### E. Persistence (`store/database.ts`, `store/schema.ts`, `store/persistence.ts`)
+
+SQLite via `expo-sqlite`, structured so the parts that can hold bugs are
+testable without a device:
+
+- `schema.ts` is pure — DDL, row mapping, bind-parameter ordering. `amount_minor`
+  is `INTEGER NOT NULL` and `dedupe_key` is `UNIQUE`, so a double-counted
+  payment is rejected by the database and not only by app logic.
+- `database.ts` owns the connection and migrations (`PRAGMA user_version`), and
+  degrades to a no-op if SQLite cannot open — the app runs in memory rather
+  than refusing to start.
+- `persistence.ts` diffs successive store states and writes only what changed.
+  It is wired as a `subscribe` at module scope, so **any action added later is
+  persisted automatically** rather than silently not being saved.
+
+The store hydrates via `hydrate()` at app start and remains the single
+in-memory source of truth; SQLite is a write-through cache behind it, not a
+second store.
+
+---
+
 ## 6. Current Status
 
 All of the below is merged to `main`.
@@ -164,34 +185,33 @@ All of the below is merged to `main`.
 | Area | State |
 |---|---|
 | Money as integer paise | Done |
-| Ingestion pipeline (parse, dedupe, reject) | Done — 27 tests passing |
+| Ingestion pipeline (parse, dedupe, reject) | Done — 27 tests |
 | Pending-note queue | Done — tested |
 | Setup + queue UI | Done — typechecks, not exercised on a device |
 | Native module (Kotlin) | Written, **never compiled** — no Android SDK on the authoring machine |
 | Widget + voice capture | Written, **never run** |
-| Persistence | **Does not exist** — store is in-memory, seeded from mocks each launch |
+| Persistence | Done — SQLite, write-through, 20 tests |
 | Backend / Supabase | Not started — Express has a health route only |
 | Merchant memory / LLM categorization | Not started |
 | Budgets & analytics | Not started |
 
 ### The honest summary
 
-The middle of the core loop — parse, dedupe, queue — is built and tested. Both
-ends are not: capture is unproven code, and persistence is absent. **No real
-payment has gone through this app end to end.** A passing test suite here means
-the decision logic is correct, not that the product works.
+Everything from parsing through storage is built and tested: a payment that
+reaches the pipeline is deduped, queued, and survives restart. What is not
+proven is the step before all of that — **capture** — because the Kotlin has
+never been compiled. **No real payment has gone through this app end to end.**
+A passing test suite here means the decision logic is correct, not that the
+product works.
 
-Two consequences worth internalising before working on this:
-
-- If `NativeModules.KenIngestion` is `undefined` at runtime, every bridge call
-  silently no-ops. The app will look like it is working while capturing
-  nothing — check this explicitly rather than inferring from the UI.
-- Even with capture working perfectly, every payment and voice note is lost on
-  app restart until persistence exists.
+The trap most likely to mislead you: if `NativeModules.KenIngestion` is
+`undefined` at runtime, every bridge call silently no-ops. The app will look
+like it is working while capturing nothing — check this explicitly rather than
+inferring from the UI.
 
 **Next steps:** see `todo_next.md`. In short — compile the Kotlin if you have an
-Android SDK; otherwise build SQLite persistence, which is unblocked and is the
-highest-value work that does not need a device.
+Android SDK; otherwise build merchant memory, which is unblocked and removes
+most of the categorization tedium without needing a device.
 
 ## 7. Guidelines for Agents & Teammates
 

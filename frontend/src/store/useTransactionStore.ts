@@ -6,6 +6,14 @@ import {
   reconcileTransactionList,
 } from '../utils/reconciliationEngine';
 import { ingestEvent, type IngestionOutcome } from '../ingestion/ingest';
+import {
+  deleteAllTransactions,
+  deleteTransaction as deleteTransactionFromDatabase,
+  initDatabase,
+  loadTransactions,
+  saveTransactions,
+} from './database';
+import { persistDiff } from './persistence';
 import type { IngestionEvent } from '../ingestion/types';
 import {
   selectCaptureTarget,
@@ -48,11 +56,23 @@ interface TransactionState {
   // --- Bulk ---
   reconcileAll: () => number;
   setTransactions: (transactions: Transaction[]) => void;
-  resetToMock: () => void;
+
+  // --- Persistence ---
+  /** True once hydration from SQLite has finished (or failed). */
+  hydrated: boolean;
+  /** Loads stored transactions. Call once, at app start. */
+  hydrate: () => Promise<void>;
+  /** Dev affordance: replaces everything with sample data. */
+  loadSampleData: () => void;
+  /** Removes every transaction, on device and in memory. */
+  clearAll: () => void;
 }
 
 export const useTransactionStore = create<TransactionState>((set, get) => ({
-  transactions: mockTransactions,
+  // Starts empty and is filled by hydrate(). Seeding real users with mock
+  // rows would be a correctness bug, not just untidy.
+  transactions: [],
+  hydrated: false,
 
   ingest: (event) => {
     const outcome = ingestEvent(event, get().transactions);
@@ -200,5 +220,41 @@ export const useTransactionStore = create<TransactionState>((set, get) => ({
 
   setTransactions: (transactions) => set({ transactions }),
 
-  resetToMock: () => set({ transactions: mockTransactions }),
+  hydrate: async () => {
+    if (get().hydrated) return;
+
+    const available = await initDatabase();
+    if (available) {
+      const stored = await loadTransactions();
+      // Assigned directly rather than merged: at hydration the database is
+      // authoritative and nothing has been captured in this session yet.
+      set({ transactions: stored });
+    }
+
+    // Marked hydrated even when SQLite is unavailable, so the UI leaves its
+    // loading state and the app still works in memory.
+    set({ hydrated: true });
+  },
+
+  loadSampleData: () => set({ transactions: mockTransactions }),
+
+  clearAll: () => {
+    set({ transactions: [] });
+    void deleteAllTransactions();
+  },
 }));
+
+/**
+ * Write-through persistence.
+ *
+ * Subscribing here rather than saving inside each action means any action
+ * added later is persisted automatically. Registered at module scope so it is
+ * attached before the first mutation can happen.
+ */
+useTransactionStore.subscribe((state, previous) => {
+  if (state.transactions === previous.transactions) return;
+  void persistDiff(previous.transactions, state.transactions, {
+    saveTransactions,
+    deleteTransaction: deleteTransactionFromDatabase,
+  });
+});
