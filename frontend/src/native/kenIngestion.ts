@@ -2,14 +2,14 @@
  * JS bridge to the Kotlin ingestion module.
  *
  * The native side owns both capture channels — the SMS BroadcastReceiver and
- * the NotificationListenerService — and writes what it sees into a Room
- * staging table. JS drains that table; it is never on the capture hot path
+ * the NotificationListenerService — and writes what it sees into a staging
+ * buffer. JS drains that buffer; it is never on the capture hot path
  * (rules.md §7).
  *
  * Every function here degrades gracefully when the native module is absent
  * (web, or a build without the module linked) so the app still runs.
  */
-import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
+import { NativeEventEmitter, NativeModules, PermissionsAndroid, Platform } from 'react-native';
 import type { IngestionEvent } from '../ingestion/types';
 
 /** Shape the Kotlin module emits and stores. */
@@ -22,8 +22,6 @@ export interface NativeIngestionEvent {
 }
 
 interface KenIngestionNativeModule {
-  /** Runtime SMS permissions. Resolves false if the user declines. */
-  requestSmsPermission(): Promise<boolean>;
   hasSmsPermission(): Promise<boolean>;
 
   /**
@@ -45,10 +43,20 @@ interface KenIngestionNativeModule {
   drainSkips(): Promise<string[]>;
 
   /** Pushes the current queue head to the home-screen widget. */
-  updateWidget(payload: WidgetPayload): Promise<void>;
+  updateWidget(
+    transactionId: string | null,
+    amountMinor: number | null,
+    merchant: string | null,
+    pendingCount: number,
+  ): Promise<void>;
 
   /** Dev affordance: pushes a fake event through the real native path. */
-  simulateEvent(payload: NativeIngestionEvent): Promise<void>;
+  simulateEvent(
+    channel: 'sms' | 'notification',
+    origin: string,
+    title: string | null,
+    body: string,
+  ): Promise<void>;
 }
 
 export interface NativeVoiceNote {
@@ -88,9 +96,25 @@ export function addIngestionListener(
   return emitter.addListener(INGESTION_EVENT, handler);
 }
 
+/**
+ * RECEIVE_SMS and READ_SMS are ordinary runtime permissions, so React
+ * Native's own helper is enough once the manifest declares them — which is
+ * exactly what was missing before and made every request fail instantly.
+ */
 export async function requestSmsPermission(): Promise<boolean> {
-  if (!nativeModule) return false;
-  return nativeModule.requestSmsPermission();
+  if (Platform.OS !== 'android') return false;
+
+  const granted = await PermissionsAndroid.requestMultiple([
+    PermissionsAndroid.PERMISSIONS.RECEIVE_SMS,
+    PermissionsAndroid.PERMISSIONS.READ_SMS,
+  ]);
+
+  return (
+    granted[PermissionsAndroid.PERMISSIONS.RECEIVE_SMS] ===
+      PermissionsAndroid.RESULTS.GRANTED &&
+    granted[PermissionsAndroid.PERMISSIONS.READ_SMS] ===
+      PermissionsAndroid.RESULTS.GRANTED
+  );
 }
 
 export async function hasSmsPermission(): Promise<boolean> {
@@ -125,7 +149,12 @@ export async function drainSkips(): Promise<string[]> {
 
 export async function updateWidget(payload: WidgetPayload): Promise<void> {
   if (!nativeModule) return;
-  return nativeModule.updateWidget(payload);
+  return nativeModule.updateWidget(
+    payload.transactionId,
+    payload.amountMinor,
+    payload.merchant,
+    payload.pendingCount,
+  );
 }
 
 /**
@@ -135,7 +164,12 @@ export async function updateWidget(payload: WidgetPayload): Promise<void> {
  */
 export async function simulateEvent(event: NativeIngestionEvent): Promise<void> {
   if (!nativeModule) return;
-  return nativeModule.simulateEvent(event);
+  return nativeModule.simulateEvent(
+    event.channel,
+    event.origin,
+    event.title ?? null,
+    event.body,
+  );
 }
 
 /** Normalises a native event into the shape the parser expects. */

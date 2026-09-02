@@ -14,8 +14,7 @@ import android.view.View
 import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
-import androidx.activity.ComponentActivity
-import androidx.core.app.ActivityCompat
+import android.app.Activity
 import androidx.core.content.ContextCompat
 import java.io.File
 
@@ -27,7 +26,7 @@ import java.io.File
  * counter abandons (rules.md §7). Results go to VoiceNoteBuffer for JS to
  * drain later.
  */
-class VoiceCaptureActivity : ComponentActivity() {
+class VoiceCaptureActivity : Activity() {
 
     private var recognizer: SpeechRecognizer? = null
     private var recorder: MediaRecorder? = null
@@ -61,8 +60,7 @@ class VoiceCaptureActivity : ComponentActivity() {
         } else {
             // A widget tap cannot show a permission dialog from nowhere, so the
             // Activity is the right place to ask.
-            ActivityCompat.requestPermissions(
-                this,
+            requestPermissions(
                 arrayOf(Manifest.permission.RECORD_AUDIO),
                 REQUEST_MIC_PERMISSION
             )
@@ -165,6 +163,9 @@ class VoiceCaptureActivity : ComponentActivity() {
                 // rather than failing the capture.
                 if (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY && recorder != null) {
                     releaseRecorder(deleteFile = true)
+                    // Destroy this recognizer before starting another, or the
+                    // old one leaks and keeps holding the microphone.
+                    releaseRecognizer()
                     startRecognition()
                     return
                 }

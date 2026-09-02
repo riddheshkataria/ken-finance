@@ -14,6 +14,8 @@ import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
 import { useTransactionStore } from './src/store/useTransactionStore';
 import { FloatingMic } from './src/components/FloatingMic';
+import { IngestionSetupCard } from './src/components/IngestionSetupCard';
+import { PendingQueueBanner } from './src/components/PendingQueueBanner';
 import { Transaction, TransactionCategory } from './src/types/transaction';
 
 import { parseVoiceToTransaction } from './src/utils/voiceParser';
@@ -51,10 +53,20 @@ export default function App() {
     resetToMock,
   } = useTransactionStore();
   const [lastVoicePrompt, setLastVoicePrompt] = useState<string | null>(null);
+  // The queue item the user is currently answering, if any. A voice note
+  // recorded while this is set attaches to that payment rather than creating
+  // a new standalone transaction.
+  const [notingTransaction, setNotingTransaction] = useState<Transaction | null>(
+    null,
+  );
 
   // Both ingestion channels run concurrently and write straight into the
   // store; dedupe in ingestion/dedupe.ts keeps one payment as one row.
-  const { permissions } = useIngestion();
+  const { available, permissions, requestSms, openNotificationSettings } =
+    useIngestion();
+  const skipInQueue = useTransactionStore((state) => state.skipInQueue);
+  const ignoreTransaction = useTransactionStore((state) => state.ignoreTransaction);
+  const attachNote = useTransactionStore((state) => state.attachNote);
   const pendingQueue = useTransactionStore((state) =>
     selectPendingQueue(state.transactions),
   );
@@ -72,6 +84,24 @@ export default function App() {
 
   const handleVoiceComplete = (transcription: string) => {
     setLastVoicePrompt(transcription);
+
+    // Answering a queued payment attaches the note to it. Creating a second
+    // standalone transaction here would double-count the same spend, which is
+    // the failure mode the whole dedupe layer exists to prevent.
+    if (notingTransaction) {
+      attachNote(notingTransaction.id, {
+        text: transcription,
+        transcript: transcription,
+        audioPath: null,
+      });
+      setNotingTransaction(null);
+      Alert.alert(
+        'Note added',
+        `${formatINR(notingTransaction.amountMinor)} · ${notingTransaction.paidTo}\n\n"${transcription}"`,
+      );
+      return;
+    }
+
     const parsed = parseVoiceToTransaction(transcription);
     const id = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
     const newTx: Transaction = {
@@ -203,6 +233,21 @@ export default function App() {
               </View>
             </View>
           </View>
+
+          <IngestionSetupCard
+            available={available}
+            permissions={permissions}
+            onRequestSms={() => void requestSms()}
+            onOpenNotificationSettings={() => void openNotificationSettings()}
+          />
+
+          <PendingQueueBanner
+            head={pendingQueue[0] ?? null}
+            remaining={Math.max(0, pendingQueue.length - 1)}
+            onAddNote={(transaction) => setNotingTransaction(transaction)}
+            onSkip={(transaction) => skipInQueue(transaction.id)}
+            onIgnore={(transaction) => ignoreTransaction(transaction.id)}
+          />
 
           {/* Voice Feedback Banner */}
           {lastVoicePrompt && (

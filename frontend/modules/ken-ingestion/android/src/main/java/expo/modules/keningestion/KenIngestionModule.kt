@@ -15,6 +15,11 @@ import expo.modules.kotlin.modules.ModuleDefinition
  * Native captures and buffers; JavaScript parses, dedupes and decides. This
  * module is only the seam between them — it holds no parsing logic, because a
  * second parser in Kotlin would drift from the tested one in TypeScript.
+ *
+ * Requesting SMS permission is deliberately absent: RECEIVE_SMS and READ_SMS
+ * are ordinary runtime permissions, so React Native's PermissionsAndroid
+ * handles them once the manifest declares them. Reimplementing the request
+ * here would mean owning the activity-result plumbing for no benefit.
  */
 class KenIngestionModule : Module() {
 
@@ -43,28 +48,6 @@ class KenIngestionModule : Module() {
         AsyncFunction("hasSmsPermission") {
             hasPermission(Manifest.permission.RECEIVE_SMS) &&
                 hasPermission(Manifest.permission.READ_SMS)
-        }
-
-        AsyncFunction("requestSmsPermission") { promise: expo.modules.kotlin.Promise ->
-            // Expo's permission helper handles the activity result plumbing.
-            val activity = appContext.activityProvider?.currentActivity
-            if (activity == null) {
-                promise.resolve(false)
-                return@AsyncFunction
-            }
-
-            androidx.core.app.ActivityCompat.requestPermissions(
-                activity,
-                arrayOf(Manifest.permission.RECEIVE_SMS, Manifest.permission.READ_SMS),
-                REQUEST_SMS_PERMISSION
-            )
-
-            // The dialog is asynchronous and Android gives no callback here;
-            // JS re-reads state on the next foreground via refreshPermissions.
-            promise.resolve(
-                hasPermission(Manifest.permission.RECEIVE_SMS) &&
-                    hasPermission(Manifest.permission.READ_SMS)
-            )
         }
 
         /**
@@ -97,7 +80,7 @@ class KenIngestionModule : Module() {
                     "transactionId" to note.transactionId,
                     "transcript" to note.transcript,
                     "audioPath" to note.audioPath,
-                    "capturedAt" to note.capturedAt
+                    "capturedAt" to note.capturedAt.toDouble()
                 )
             }
         }
@@ -108,26 +91,37 @@ class KenIngestionModule : Module() {
 
         // --- Widget ------------------------------------------------------
 
-        AsyncFunction("updateWidget") { payload: Map<String, Any?> ->
+        /**
+         * Parameters are explicit rather than a loose map: Expo converts
+         * primitives reliably, and amounts arrive as Double because
+         * JavaScript numbers have no integer type on the bridge. The value is
+         * still integer paise — it is converted, never rounded.
+         */
+        AsyncFunction("updateWidget") { transactionId: String?,
+                                        amountMinor: Double?,
+                                        merchant: String?,
+                                        pendingCount: Int ->
             WidgetState.setParsedHead(
                 context = context,
-                transactionId = payload["transactionId"] as? String,
-                amountMinor = (payload["amountMinor"] as? Number)?.toLong(),
-                merchant = payload["merchant"] as? String,
-                pendingCount = (payload["pendingCount"] as? Number)?.toInt() ?: 0
+                transactionId = transactionId,
+                amountMinor = amountMinor?.toLong(),
+                merchant = merchant,
+                pendingCount = pendingCount
             )
             PendingNoteNotifier.show(context)
         }
 
-        /** Dev affordance: push a fake event through the real native path. */
-        AsyncFunction("simulateEvent") { payload: Map<String, Any?> ->
+        /** Dev affordance: pushes a fake event through the real native path. */
+        AsyncFunction("simulateEvent") { channel: String,
+                                         origin: String,
+                                         title: String?,
+                                         body: String ->
             val event = IngestionInbox.Event(
-                channel = payload["channel"] as? String ?: IngestionInbox.CHANNEL_SMS,
-                origin = payload["origin"] as? String ?: "AD-HDFCBK",
-                title = payload["title"] as? String,
-                body = payload["body"] as? String ?: "",
-                receivedAt = (payload["receivedAt"] as? Number)?.toLong()
-                    ?: System.currentTimeMillis()
+                channel = channel,
+                origin = origin,
+                title = title,
+                body = body,
+                receivedAt = System.currentTimeMillis()
             )
             IngestionInbox.add(context, event)
             IngestionBus.publish(event)
@@ -144,11 +138,12 @@ class KenIngestionModule : Module() {
         "origin" to origin,
         "title" to title,
         "body" to body,
-        "receivedAt" to receivedAt
+        // Double, not Long: the bridge has no integer type and a Long can be
+        // silently truncated on the way across.
+        "receivedAt" to receivedAt.toDouble()
     )
 
     private companion object {
         const val EVENT_NAME = "KenIngestion.event"
-        const val REQUEST_SMS_PERMISSION = 4001
     }
 }
