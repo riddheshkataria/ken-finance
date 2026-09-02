@@ -2,7 +2,7 @@
 
 > **Purpose**: Current implementation state for developers and AI coding agents working on **Ken Finance**.
 >
-> **Reading order for a new agent:** `rules.md` (binding conventions) → `plan.md` (architecture and roadmap) → this file.
+> **Reading order for a new agent:** `rules.md` (binding conventions) → `plan.md` (architecture and roadmap) → this file → `todo_next.md` (what to do next, written to be executed autonomously).
 
 ---
 
@@ -159,19 +159,39 @@ cd backend && npm install && npm run dev   # Express on :5000
 
 ## 6. Current Status
 
+All of the below is merged to `main`.
+
 | Area | State |
 |---|---|
-| Ingestion pipeline (parse, dedupe, reject) | Done, 27 tests passing |
-| Pending-note queue | Done, tested |
 | Money as integer paise | Done |
-| Native module (Kotlin) | Written, **not yet compiled or run** |
-| Widget + voice capture | Written, **not yet run on device/emulator** |
+| Ingestion pipeline (parse, dedupe, reject) | Done — 27 tests passing |
+| Pending-note queue | Done — tested |
+| Setup + queue UI | Done — typechecks, not exercised on a device |
+| Native module (Kotlin) | Written, **never compiled** — no Android SDK on the authoring machine |
+| Widget + voice capture | Written, **never run** |
+| Persistence | **Does not exist** — store is in-memory, seeded from mocks each launch |
 | Backend / Supabase | Not started — Express has a health route only |
+| Merchant memory / LLM categorization | Not started |
 | Budgets & analytics | Not started |
 
-**Next step:** `npx expo prebuild -p android` and a first Gradle build. The Kotlin has never been compiled, so expect ordinary build errors on the first pass.
+### The honest summary
 
----
+The middle of the core loop — parse, dedupe, queue — is built and tested. Both
+ends are not: capture is unproven code, and persistence is absent. **No real
+payment has gone through this app end to end.** A passing test suite here means
+the decision logic is correct, not that the product works.
+
+Two consequences worth internalising before working on this:
+
+- If `NativeModules.KenIngestion` is `undefined` at runtime, every bridge call
+  silently no-ops. The app will look like it is working while capturing
+  nothing — check this explicitly rather than inferring from the UI.
+- Even with capture working perfectly, every payment and voice note is lost on
+  app restart until persistence exists.
+
+**Next steps:** see `todo_next.md`. In short — compile the Kotlin if you have an
+Android SDK; otherwise build SQLite persistence, which is unblocked and is the
+highest-value work that does not need a device.
 
 ## 7. Guidelines for Agents & Teammates
 
@@ -182,4 +202,5 @@ See `rules.md` — it is binding. The points most often violated:
 3. **Zustand is the single source of truth.** No parallel Context or local mirror.
 4. **Parsers are pure and return `null` rather than guessing.** A wrong merchant is worse than a missing one.
 5. **Every parser change ships with fixtures**, including reject-cases.
-6. Run `npm run typecheck` and `npm test` before pushing.
+6. Run `npm run typecheck` and `npm test` before pushing — on the merge commit, not just the branch tip. That test suite is the gate protecting `main`; there is no standing reviewer.
+7. **Update `todo_next.md` before you finish.** The next agent is briefed by that file alone.

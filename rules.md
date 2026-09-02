@@ -1,8 +1,8 @@
 # Ken Finance — Engineering Rules
 
-> **Read this before writing any code.** Multiple people and AI agents work in this repo. These rules exist so that independently-written code composes instead of colliding. If a rule blocks something genuinely necessary, change the rule in a PR — don't quietly work around it.
+> **Read this before writing any code.** Multiple people and AI agents work in this repo. These rules exist so that independently-written code composes instead of colliding. If a rule blocks something genuinely necessary, change the rule in a commit that says why — don't quietly work around it.
 
-**Reading order for a new agent:** `rules.md` (this file) → `plan.md` (architecture & roadmap) → `CONTEXT.md` (current implementation state).
+**Reading order for a new agent:** `rules.md` (this file) → `plan.md` (architecture & roadmap) → `CONTEXT.md` (current implementation state) → `todo_next.md` (what to do next).
 
 ---
 
@@ -64,6 +64,7 @@ src/
   types/         shared TypeScript interfaces and enums
   ingestion/     SMS + notification capture, parsing, dedupe   (pure)
   store/         Zustand store and selectors
+  hooks/         React hooks (subscriptions, side effects)
   components/    presentational React components
   screens/       full screens composed from components
   utils/         pure helpers (money, dates, strings)
@@ -78,8 +79,9 @@ src/
 ## 7. Native (Kotlin) code
 
 - All native Android code lives in **one** Expo module. Do not scatter native code across community packages that go stale.
-- The **voice-capture path stays off the React Native bridge.** Booting the bridge to open a microphone costs 1–2s and the user abandons. Kotlin writes to the Room staging table; JS drains it later.
-- Native writes to Room only. It never touches the JS store directly.
+- The **voice-capture path stays off the React Native bridge.** Booting the bridge to open a microphone costs 1–2s and the user abandons. Kotlin writes to a staging buffer; JS drains it later.
+- **Native never calls into JS as its system of record.** It writes to the staging buffers (`IngestionInbox`, `VoiceNoteBuffer`, `SkipBuffer`) and only then publishes a best-effort live event. A `BroadcastReceiver` fires whether or not React Native is alive, so anything that depends on the bridge being up will drop payments.
+- **No parsing in Kotlin.** A second parser would drift from the tested one in `src/ingestion/`. Native captures raw text; JS decides what it means.
 - Every `PendingIntent` sets `FLAG_IMMUTABLE` or `FLAG_MUTABLE` explicitly (required on Android 12+).
 
 ## 8. Comments
@@ -96,16 +98,22 @@ Every non-obvious regex gets one comment with a sample of the string it matches.
 
 ## 9. Git
 
-- Never commit directly to `main` once feature work starts — branch, then PR.
+**Code changes go on a branch; the branch is merged to `main` by whoever wrote it.**
+
 - Branches: `feat/…`, `fix/…`, `docs/…`, `refactor/…`.
+- Merge with `--no-ff` so the branch stays legible in history.
+- **A pull request is optional, not a gate.** There is no standing reviewer, so waiting on review just parks work. Open a PR when you actually want a second opinion — a risky migration, a schema change, anything touching money — otherwise merge it yourself.
+- **Documentation-only changes may go straight to `main`.** Branching a typo fix in `CONTEXT.md` is ceremony.
+- **The real gate is the test suite, not review.** `npm run typecheck` and `npm test` must both pass *on the merge commit* before you push — not just on the branch tip. That is what protects `main` here, so never push through a red one.
 - Imperative subject line under ~72 chars, then a body explaining *why*.
 - Never commit `.env`, API keys, or real SMS/transaction data — fixtures must be redacted (account tails masked, names removed).
-- Run `npx tsc --noEmit` and the test suite before pushing.
+- Never commit generated output: `frontend/android/` and `frontend/ios/` come from `expo prebuild` and are gitignored deliberately.
 
 ## 10. For AI agents specifically
 
 - **Read `plan.md` and `CONTEXT.md` before changing architecture.** If your change contradicts them, update the docs in the same commit — stale docs are worse than none.
 - Prefer editing existing files over creating parallel ones. If you find yourself writing `smsParserV2.ts`, stop and refactor the original instead.
-- Do not add a dependency without noting why in the PR body. Check whether an existing dep already does the job.
+- Do not add a dependency without saying why in the commit body. Check whether an existing dep already does the job.
 - Do not reformat or restructure files you weren't asked to touch — it buries the real diff and causes conflicts with other agents' work.
-- When you finish, state plainly what you verified versus what you only wrote. Native Android code cannot be verified without a real device; say so rather than implying it works.
+- **Update `todo_next.md` before you finish** — tick off what you completed, add what you discovered, correct what turned out to be wrong. The next agent is briefed by that file and nothing else, so leaving it stale strands them.
+- When you finish, state plainly what you verified by running it versus what you only wrote. Android native code cannot be verified without a device or emulator; say so rather than implying it works.
