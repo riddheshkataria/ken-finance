@@ -33,7 +33,7 @@ that** — do not start work on top of a broken baseline.
 cd frontend
 npm install
 npm run typecheck   # must print nothing
-npm test            # must report 65+ pass, 0 fail
+npm test            # must report 78+ pass, 0 fail
 ```
 
 Both are also your definition of done for every task below. Never commit with
@@ -63,7 +63,10 @@ levels of trust.
   user memory beats the shipped dictionary, both beat guessing. Normalisation
   collapses the four channel spellings of a merchant to one key without
   merging genuinely different businesses.
-- 65 tests across `src/ingestion/`, `src/store/` and `src/merchants/`.
+- **LLM categorization** (`backend/src/categorize.js`,
+  `src/merchants/llmCategorizer.ts`) — last tier, batched, cached, and gated
+  so it only runs for merchants the free tiers could not answer.
+- 78 tests across `src/ingestion/`, `src/store/` and `src/merchants/`.
 
 ### Written but NEVER COMPILED — do not trust it
 Everything in `frontend/modules/ken-ingestion/` (~900 lines of Kotlin): SMS
@@ -78,8 +81,8 @@ the machine where it was written. **It has never been through a compiler.**
 > Check this explicitly before concluding anything about capture.
 
 ### Does not exist
-- Backend (Express is a health route only), Supabase, sync.
-- LLM categorization.
+- Supabase, auth, sync. The backend is Express with one categorisation
+  endpoint and no database.
 - Budgets, analytics, history views.
 
 ### The honest summary
@@ -131,9 +134,9 @@ ls "$LOCALAPPDATA/Android/Sdk" 2>/dev/null
 ```
 
 - **SDK present** → do **TASK A** first (it unblocks everything).
-- **No SDK** → skip TASK A, start at **TASK D** (B and C are already done).
-  Say in your report that A was skipped and why. Do not attempt to install an
-  SDK unprompted.
+- **No SDK** → skip TASK A, start at **TASK F** (B, C and D are done; E is
+  optional). Say in your report that A was skipped and why. Do not attempt to
+  install an SDK unprompted.
 
 ---
 
@@ -242,22 +245,34 @@ cheap, useful, and safe — add entries with their normalised key, lowercase.
 
 ---
 
-## TASK D — LLM categorization ← **START HERE if you have no Android SDK**
+## TASK D — LLM categorization ✅ DONE
 
-Only for merchants that neither user memory nor the dictionary knows. Check
-`resolveCategory` returns `source: 'none'` before spending a call — most
-transactions should never reach this tier.
+Merged to `main`. `backend/src/categorize.js` plus
+`src/merchants/llmCategorizer.ts`, triggered from `categorizePending()`.
 
-Read the `claude-api` skill before writing any of this — do not write Anthropic
-SDK calls from memory.
+**Verified:** endpoint validation, batch cap, graceful 503, request shape,
+enum-drift rejection, network-failure fallback.
+**Not verified:** a real Claude call has never run — there was no API key on
+the authoring machine. The request shape follows the current SDK docs but has
+never had a live response.
 
-- `claude-opus-5` via `@anthropic-ai/sdk` in the **Express layer**, not the app
-- Structured outputs (`output_config.format`), taxonomy prompt-cached
-- Route non-urgent backfill through the Batch API (50% cost)
-- Input is the voice transcript plus merchant; output is one of the 8
-  categories, never a new one
-- Decide the model tier with real data. `claude-haiku-4-5` is ~5x cheaper and
-  may be adequate for short-text classification — measure, do not assume
+To turn it on: copy `backend/.env.example` to `backend/.env` and set
+`ANTHROPIC_API_KEY`. Without it the app still works; the user categorises
+manually and merchant memory learns from that.
+
+**Two things not to undo:**
+
+1. **Never call this without checking the free tiers first.** `selectNeedingLlm`
+   filters to `source: 'none'` and requires a note. Removing either turns a
+   near-zero cost into a per-transaction bill for answers a lookup table
+   already had.
+2. **Only high-confidence answers become memory.** Remembering a guess lets one
+   model mistake apply to every future payment to that merchant — and since
+   memory outranks the dictionary, it can override a correct shipped answer.
+
+Open: cost has never been measured against real traffic. `claude-opus-5` at
+`effort: 'low'` is the current choice; `claude-haiku-4-5` is ~5x cheaper and
+may be adequate. Decide with data, not upfront.
 
 ---
 
@@ -272,7 +287,7 @@ SDK calls from memory.
 
 ---
 
-## TASK F — Budgets and analytics (the reason to keep using it)
+## TASK F — Budgets and analytics ← **START HERE if you have no Android SDK**
 
 - Monthly budget per category
 - **Burn rate vs. days remaining** — not "you spent ₹4,200" but "70% through
