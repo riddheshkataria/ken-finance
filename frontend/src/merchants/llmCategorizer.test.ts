@@ -30,6 +30,9 @@ const base: Transaction = {
   note: 'team lunch',
   transcript: 'team lunch',
   audioPath: null,
+  updatedAt: '2026-09-01T12:00:00.000Z',
+  deletedAt: null,
+  syncedAt: null,
 };
 
 const make = (overrides: Partial<Transaction>): Transaction => ({

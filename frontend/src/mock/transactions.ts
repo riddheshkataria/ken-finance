@@ -26,6 +26,9 @@ export const mockTransactions: Transaction[] = [
     note: 'Team dinner, reimbursable',
     transcript: 'dinner at social with the team, reimbursable',
     audioPath: null,
+    updatedAt: '2026-09-01T12:00:00.000Z',
+    deletedAt: null,
+    syncedAt: null,
   },
   {
     id: '550e8400-e29b-41d4-a716-446655440000',
@@ -48,6 +51,9 @@ export const mockTransactions: Transaction[] = [
     note: null,
     transcript: null,
     audioPath: null,
+    updatedAt: '2026-09-01T12:00:00.000Z',
+    deletedAt: null,
+    syncedAt: null,
   },
   {
     id: '6ba7b810-9dad-11d1-80b4-00c04fd430c8',
@@ -70,6 +76,9 @@ export const mockTransactions: Transaction[] = [
     note: 'Client visit',
     transcript: 'uber to office for the client visit',
     audioPath: null,
+    updatedAt: '2026-09-01T12:00:00.000Z',
+    deletedAt: null,
+    syncedAt: null,
   },
   {
     id: 'a3bb189e-8bf9-3888-9912-ace4e6543002',
@@ -92,6 +101,9 @@ export const mockTransactions: Transaction[] = [
     note: null,
     transcript: null,
     audioPath: null,
+    updatedAt: '2026-09-01T12:00:00.000Z',
+    deletedAt: null,
+    syncedAt: null,
   },
   {
     id: '4b92b604-d7d2-4367-bf1b-0da69ff55eb0',
@@ -114,6 +126,9 @@ export const mockTransactions: Transaction[] = [
     note: null,
     transcript: null,
     audioPath: null,
+    updatedAt: '2026-09-01T12:00:00.000Z',
+    deletedAt: null,
+    syncedAt: null,
   },
   {
     id: '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d',
@@ -136,6 +151,9 @@ export const mockTransactions: Transaction[] = [
     note: 'Rahul settling up for the Goa trip',
     transcript: 'rahul paid me back for goa',
     audioPath: null,
+    updatedAt: '2026-09-01T12:00:00.000Z',
+    deletedAt: null,
+    syncedAt: null,
   },
   {
     id: 'e2a2c0c1-3d92-4f1a-b605-234b419811ab',
@@ -158,6 +176,9 @@ export const mockTransactions: Transaction[] = [
     note: null,
     transcript: null,
     audioPath: null,
+    updatedAt: '2026-09-01T12:00:00.000Z',
+    deletedAt: null,
+    syncedAt: null,
   },
   {
     id: '1c3b88b2-65f6-47b2-b13c-73a7431e7844',
@@ -180,5 +201,8 @@ export const mockTransactions: Transaction[] = [
     note: null,
     transcript: null,
     audioPath: null,
+    updatedAt: '2026-09-01T12:00:00.000Z',
+    deletedAt: null,
+    syncedAt: null,
   },
 ];

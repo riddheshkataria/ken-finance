@@ -127,6 +127,12 @@ export const TransactionReviewModal: React.FC<TransactionReviewModalProps> = ({
       transcript: initialData?.transcript ?? null,
       audioPath: initialData?.audioPath ?? null,
 
+      // Confirming the form is a local edit, so the row becomes dirty and is
+      // pushed on the next sync.
+      updatedAt: new Date().toISOString(),
+      deletedAt: null,
+      syncedAt: initialData?.syncedAt ?? null,
+
       id: generatedId,
       amountMinor: rupeesToPaise(parseFloat(amount) || 0),
       title: title.trim() || 'Transaction',

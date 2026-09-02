@@ -31,7 +31,11 @@ export type BudgetMap = Readonly<Partial<Record<TransactionCategory, number>>>;
  */
 export function isSpend(transaction: Transaction): boolean {
   return (
-    transaction.transactionType === 'Debit' && transaction.status !== 'ignored'
+    transaction.transactionType === 'Debit' &&
+    transaction.status !== 'ignored' &&
+    // A soft-deleted row stays in memory as a tombstone so the delete can be
+    // synced. It must never reach a total.
+    transaction.deletedAt === null
   );
 }
 

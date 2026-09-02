@@ -66,6 +66,10 @@ export function ingestEvent(
       note: null,
       transcript: null,
       audioPath: null,
+      updatedAt: new Date().toISOString(),
+      deletedAt: null,
+      // Never synced: this row is dirty and will be pushed on the next sync.
+      syncedAt: null,
     },
   };
 }
