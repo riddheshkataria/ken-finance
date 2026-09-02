@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   StyleSheet,
   Text,
@@ -50,7 +50,10 @@ export default function App() {
     transactions,
     addTransaction,
     deleteTransaction,
-    resetToMock,
+    hydrated,
+    hydrate,
+    loadSampleData,
+    clearAll,
   } = useTransactionStore();
   const [lastVoicePrompt, setLastVoicePrompt] = useState<string | null>(null);
   // The queue item the user is currently answering, if any. A voice note
@@ -59,6 +62,12 @@ export default function App() {
   const [notingTransaction, setNotingTransaction] = useState<Transaction | null>(
     null,
   );
+
+  // Load persisted transactions before anything else renders meaningfully.
+  // Runs once; hydrate() is idempotent.
+  useEffect(() => {
+    void hydrate();
+  }, [hydrate]);
 
   // Both ingestion channels run concurrently and write straight into the
   // store; dedupe in ingestion/dedupe.ts keeps one payment as one row.
@@ -198,7 +207,22 @@ export default function App() {
               <Text style={styles.appName}>Ken Finance</Text>
               <Text style={styles.appSubtitle}>Smart Voice & SMS Finance Manager</Text>
             </View>
-            <TouchableOpacity style={styles.resetButton} onPress={resetToMock}>
+            <TouchableOpacity
+              style={styles.resetButton}
+              onPress={() => {
+                // Sample data is a development affordance; loading it over a
+                // real user's history would be destructive, so confirm first.
+                Alert.alert(
+                  'Replace all data?',
+                  'This clears your transactions and loads sample data.',
+                  [
+                    { text: 'Cancel', style: 'cancel' },
+                    { text: 'Clear all', style: 'destructive', onPress: clearAll },
+                    { text: 'Load samples', onPress: loadSampleData },
+                  ],
+                );
+              }}
+            >
               <Ionicons name="refresh" size={16} color="#4B5563" />
               <Text style={styles.resetButtonText}>Reset Data</Text>
             </TouchableOpacity>
@@ -275,9 +299,23 @@ export default function App() {
             showsVerticalScrollIndicator={false}
             ListEmptyComponent={
               <View style={styles.emptyContainer}>
-                <Ionicons name="receipt-outline" size={48} color="#D1D5DB" />
-                <Text style={styles.emptyText}>No transactions found</Text>
-                <Text style={styles.emptySubtext}>Use the mic or reset data to get started</Text>
+                <Ionicons
+                  name={hydrated ? 'receipt-outline' : 'hourglass-outline'}
+                  size={48}
+                  color="#D1D5DB"
+                />
+                {/* Distinguish "still loading" from "genuinely empty" — the
+                    two look identical otherwise, and telling a user with a
+                    year of history that they have none is alarming. */}
+                <Text style={styles.emptyText}>
+                  {hydrated ? 'No transactions yet' : 'Loading your transactions…'}
+                </Text>
+                {hydrated && (
+                  <Text style={styles.emptySubtext}>
+                    Hold the mic to log one, or grant access above to capture
+                    payments automatically
+                  </Text>
+                )}
               </View>
             }
           />
