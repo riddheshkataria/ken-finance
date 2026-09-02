@@ -171,6 +171,8 @@ export function searchTransactions(
   if (terms.length === 0) return [];
 
   return transactions.filter((transaction) => {
+    if (transaction.deletedAt !== null) return false;
+
     const haystack = [
       transaction.note,
       transaction.transcript,

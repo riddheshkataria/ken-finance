@@ -145,6 +145,10 @@ export function useIngestion(): UseIngestionResult {
     // merchants the free tiers could not answer, and is fire-and-forget so a
     // slow or absent backend never delays the widget update above.
     void store.categorizePending();
+
+    // Fire-and-forget: a slow or unreachable server must never delay the
+    // widget update or the capture path above.
+    void store.sync();
   }, [available, pushQueueToWidget]);
 
   useEffect(() => {

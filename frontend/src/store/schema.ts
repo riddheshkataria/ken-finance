@@ -19,7 +19,7 @@ import type {
 import type { MerchantMemory } from '../merchants/lookup';
 
 /** Bumped whenever MIGRATIONS gains an entry. */
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 /**
  * Ordered migrations, applied by PRAGMA user_version.
@@ -86,6 +86,17 @@ export const MIGRATIONS: readonly string[] = [
     updated_at   TEXT NOT NULL
   );
   `,
+
+  // v4 — sync metadata. Added as ALTER rather than a new table so existing
+  // rows keep their ids; the defaults mark everything as never-synced, which
+  // is correct: nothing has been pushed anywhere yet.
+  `ALTER TABLE transactions ADD COLUMN updated_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00.000Z';`,
+  // Soft delete. A hard delete cannot be synced — the row vanishes locally
+  // and the server, never having heard about it, pushes it back on the next
+  // pull. Only a tombstone propagates.
+  `ALTER TABLE transactions ADD COLUMN deleted_at TEXT;`,
+  `ALTER TABLE transactions ADD COLUMN synced_at TEXT;`,
+  `CREATE INDEX IF NOT EXISTS idx_transactions_synced ON transactions (synced_at);`,
 ];
 
 /** A row exactly as SQLite stores it. */
@@ -110,6 +121,9 @@ export interface TransactionRow {
   note: string | null;
   transcript: string | null;
   audio_path: string | null;
+  updated_at: string;
+  deleted_at: string | null;
+  synced_at: string | null;
 }
 
 export const TRANSACTION_COLUMNS = [
@@ -133,6 +147,9 @@ export const TRANSACTION_COLUMNS = [
   'note',
   'transcript',
   'audio_path',
+  'updated_at',
+  'deleted_at',
+  'synced_at',
 ] as const;
 
 /**
@@ -149,7 +166,18 @@ ON CONFLICT(id) DO UPDATE SET
 `;
 
 export const SELECT_ALL_SQL =
+  'SELECT * FROM transactions WHERE deleted_at IS NULL ORDER BY timestamp DESC;';
+
+/** Including tombstones — the sync engine needs them to propagate deletes. */
+export const SELECT_ALL_INCLUDING_DELETED_SQL =
   'SELECT * FROM transactions ORDER BY timestamp DESC;';
+
+/** Rows with local changes the server has not acknowledged. */
+export const SELECT_DIRTY_SQL = `
+SELECT * FROM transactions
+WHERE synced_at IS NULL OR updated_at > synced_at
+ORDER BY updated_at ASC;
+`;
 
 export const DELETE_TRANSACTION_SQL = 'DELETE FROM transactions WHERE id = ?;';
 
@@ -247,6 +275,9 @@ export function toRow(transaction: Transaction): TransactionRow {
     note: transaction.note,
     transcript: transaction.transcript,
     audio_path: transaction.audioPath,
+    updated_at: transaction.updatedAt,
+    deleted_at: transaction.deletedAt,
+    synced_at: transaction.syncedAt,
   };
 }
 
@@ -285,5 +316,8 @@ export function fromRow(row: TransactionRow): Transaction {
     note: row.note,
     transcript: row.transcript,
     audioPath: row.audio_path,
+    updatedAt: row.updated_at,
+    deletedAt: row.deleted_at,
+    syncedAt: row.synced_at,
   };
 }

@@ -257,6 +257,40 @@ money that never left the user's control.
 
 ---
 
+### I. Supabase sync (`sync/`, `supabase/schema.sql`)
+
+Offline-first. Local SQLite stays the source of truth; sync is best-effort and
+the app is fully usable with Supabase unconfigured.
+
+Every decision — what is dirty, what to pull, who wins a conflict — lives in
+`sync/merge.ts` with no network code, so all of it is testable in plain Node.
+`supabaseClient.ts` only moves rows and maps column names. Sync bugs lose or
+duplicate money the user believes is recorded, and are near-impossible to
+reproduce once they only appear against a live server.
+
+Three rules that carry the weight:
+
+- **Deletes are tombstones.** A hard delete cannot propagate: the row vanishes
+  locally and the server, never having heard about it, pushes it straight back
+  on the next pull. `deletedAt` is set instead, and every read path filters it.
+- **`syncedAt` is set to the row's own `updatedAt`, never to "now".** Using the
+  wall clock would mark clean a row the user edited while the push was in
+  flight, and that edit would never be sent.
+- **Pull before push.** A conflict is then resolved with both versions in hand
+  and the winner goes out in the same pass.
+
+Conflict resolution is last-write-wins per row, with exact ties going to
+remote so two devices cannot ping-pong an identical row forever. That is the
+right trade here: one user, few devices, rows almost never edited in two
+places at once.
+
+`supabase/schema.sql` carries `amount_minor BIGINT`, a per-user
+`UNIQUE(user_id, dedupe_key)`, and RLS on every table — the anon key ships
+inside the app, so RLS is the only thing separating one user's data from
+another's.
+
+---
+
 ## 6. Current Status
 
 All of the below is merged to `main`.
@@ -269,9 +303,9 @@ All of the below is merged to `main`.
 | Setup + queue UI | Done — typechecks, not exercised on a device |
 | Native module (Kotlin) | Written, **never compiled** — no Android SDK on the authoring machine |
 | Widget + voice capture | Written, **never run** |
-| Persistence | Done — SQLite, write-through, 20 tests (schema v2) |
+| Persistence | Done — SQLite, write-through, 20 tests (schema v4) |
 | Backend | Express + POST /api/categorize. No database, no auth, no sync |
-| Supabase | Not started |
+| Supabase sync | Done — 27 tests. Merge logic verified; never run against a live Supabase project |
 | Merchant memory | Done — 19 tests |
 | LLM categorization | Done — 13 tests. Endpoint verified; a real Claude call has never run (no API key here) |
 | Budgets & analytics | Done — 28 tests (schema v3) |
@@ -290,9 +324,9 @@ The trap most likely to mislead you: if `NativeModules.KenIngestion` is
 like it is working while capturing nothing — check this explicitly rather than
 inferring from the UI.
 
-**Next steps:** see `todo_next.md`. The remaining blocked work is Task A —
-compiling the Kotlin — which needs a machine with the Android SDK. Everything
-that can be built without a device is done.
+**Next steps:** see `todo_next.md`. The only remaining work is Task A —
+compiling the Kotlin — which needs a machine with the Android SDK. Every
+feature that can be built without a device is done.
 
 ## 7. Guidelines for Agents & Teammates
 

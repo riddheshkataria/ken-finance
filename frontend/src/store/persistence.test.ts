@@ -25,6 +25,9 @@ const base: Transaction = {
   note: null,
   transcript: null,
   audioPath: null,
+  updatedAt: '2026-09-01T12:00:00.000Z',
+  deletedAt: null,
+  syncedAt: null,
 };
 
 const make = (id: string): Transaction => ({ ...base, id, dedupeKey: `k-${id}` });

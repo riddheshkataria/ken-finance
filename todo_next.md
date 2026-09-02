@@ -33,7 +33,7 @@ that** — do not start work on top of a broken baseline.
 cd frontend
 npm install
 npm run typecheck   # must print nothing
-npm test            # must report 106+ pass, 0 fail
+npm test            # must report 133+ pass, 0 fail
 ```
 
 Both are also your definition of done for every task below. Never commit with
@@ -69,8 +69,11 @@ levels of trust.
 - **Budgets & analytics** (`src/analytics/`, `store/useBudgetStore.ts`,
   `components/InsightsPanel.tsx`) — safe-to-spend-today, overpacing warnings,
   merchant leaderboard, recurring detection, transcript search.
-- 106 tests across `src/ingestion/`, `src/store/`, `src/merchants/` and
-  `src/analytics/`.
+- **Supabase sync** (`src/sync/`, `supabase/schema.sql`) — offline-first,
+  tombstone deletes, last-write-wins per row. All merge decisions are pure and
+  tested; the transport is thin.
+- 133 tests across `src/ingestion/`, `src/store/`, `src/merchants/`,
+  `src/analytics/` and `src/sync/`.
 
 ### Written but NEVER COMPILED — do not trust it
 Everything in `frontend/modules/ken-ingestion/` (~900 lines of Kotlin): SMS
@@ -85,8 +88,8 @@ the machine where it was written. **It has never been through a compiler.**
 > Check this explicitly before concluding anything about capture.
 
 ### Does not exist
-- Supabase, auth, sync. The backend is Express with one categorisation
-  endpoint and no database.
+- Nothing of substance that can be built without a device. The remaining work
+  is Task A: compiling the Kotlin.
 
 ### The honest summary
 Parsing through storage is solid. The step before all of it — capture — is
@@ -137,11 +140,10 @@ ls "$LOCALAPPDATA/Android/Sdk" 2>/dev/null
 ```
 
 - **SDK present** → do **TASK A** first (it unblocks everything).
-- **No SDK** → **everything buildable without a device is done.** B, C, D and
-  F are complete; only E (backend/Supabase sync) remains optional. The
-  honest answer is that the project now needs a Gradle build more than it
-  needs more features — say so rather than inventing work. If you must
-  proceed, TASK E or the open items in section 6 are the useful targets.
+- **No SDK** → **every feature that can be built without a device is done.**
+  B, C, D, E and F are all complete. The honest answer is that the project
+  needs a Gradle build, not more features — say so rather than inventing work.
+  If you must proceed, the open items in section 6 are the useful targets.
 
 ---
 
@@ -281,14 +283,40 @@ may be adequate. Decide with data, not upfront.
 
 ---
 
-## TASK E — Backend and sync
+## TASK E — Supabase sync ✅ DONE
 
-- Supabase: Postgres schema mirroring `Transaction`, phone-OTP auth, storage
-  bucket for audio
-- `amount_minor BIGINT` on the server too, with `UNIQUE(dedupe_key)`
-- Wire the existing Express server as the API layer
-- Sync queue with conflict handling; offline-first is non-negotiable because
-  SMS arrives with no network
+Merged to `main`. `src/sync/` plus `supabase/schema.sql`.
+
+**To switch it on:** create a Supabase project, run `supabase/schema.sql` in
+the SQL editor, then copy `frontend/.env.example` to `frontend/.env` and set
+`EXPO_PUBLIC_SUPABASE_URL` and `EXPO_PUBLIC_SUPABASE_ANON_KEY`. Phone OTP also
+needs an SMS provider configured in Supabase Auth. Left blank, the app runs
+fully offline and every sync call is a no-op.
+
+**Verified:** all merge decisions — dirty selection, conflict resolution,
+tombstone propagation, mark-clean, watermark advance, tombstone purging.
+**Not verified:** this has never run against a live Supabase project. The SQL
+has never been executed and the client has never made a request.
+
+**Four things not to casually change:**
+
+1. **Deletes must stay tombstones.** A hard delete cannot propagate — the row
+   vanishes locally, and the server pushes it straight back on the next pull.
+   If you add a read path, filter `deletedAt !== null` or deleted rows
+   reappear in the UI and in totals.
+2. **`syncedAt` is set to the row's own `updatedAt`, never `Date.now()`.**
+   The wall clock would mark clean a row edited while the push was in flight,
+   silently losing that edit.
+3. **Pull before push.** Reversing it sends rows that are about to lose a
+   conflict, and leaves a window where the server holds a value no device
+   agrees with.
+4. **Every mutation must bump `updatedAt`** — use the `touch()` helper in
+   `useTransactionStore.ts`. A mutation that skips it looks clean to the sync
+   engine and is never pushed.
+
+Open: only transactions sync. Merchant memory and budgets have server tables
+in the schema but no client sync yet — the same merge functions apply, they
+just need wiring.
 
 ---
 

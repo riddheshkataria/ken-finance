@@ -23,7 +23,10 @@ export function selectPendingQueue(
   transactions: readonly Transaction[],
 ): Transaction[] {
   return transactions
-    .filter((transaction) => transaction.status === 'pending_note')
+    .filter(
+      (transaction) =>
+        transaction.status === 'pending_note' && transaction.deletedAt === null,
+    )
     .sort((a, b) => {
       if (a.skippedCount !== b.skippedCount) {
         return a.skippedCount - b.skippedCount;
@@ -56,7 +59,10 @@ export function selectCaptureTarget(
 ): Transaction | null {
   if (requestedId) {
     const requested = transactions.find(
-      (transaction) => transaction.id === requestedId && transaction.status === 'pending_note',
+      (transaction) =>
+        transaction.id === requestedId &&
+        transaction.status === 'pending_note' &&
+        transaction.deletedAt === null,
     );
     if (requested) return requested;
   }
@@ -76,6 +82,7 @@ export function selectItemsToRetire(
   return transactions.filter(
     (transaction) =>
       transaction.status === 'pending_note' &&
+      transaction.deletedAt === null &&
       (transaction.skippedCount >= MAX_SKIPS_BEFORE_REVIEW ||
         now - Date.parse(transaction.timestamp) > QUEUE_ITEM_MAX_AGE_MS),
   );

@@ -33,6 +33,9 @@ const sample: Transaction = {
   note: null,
   transcript: null,
   audioPath: null,
+  updatedAt: '2026-09-01T12:00:00.000Z',
+  deletedAt: null,
+  syncedAt: null,
 };
 
 describe('row mapping', () => {
@@ -55,6 +58,9 @@ describe('row mapping', () => {
       note: 'Team lunch, reimbursable',
       transcript: 'team lunch reimbursable',
       audioPath: '/data/user/0/app/files/note_1.m4a',
+      updatedAt: '2026-09-01T12:00:00.000Z',
+      deletedAt: null,
+      syncedAt: null,
       source: 'Merged',
       channel: 'notification',
     };

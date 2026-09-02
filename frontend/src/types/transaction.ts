@@ -88,6 +88,36 @@ export interface Transaction {
 
   /** Local file path of the recording, so the user can replay and correct. */
   audioPath: string | null;
+
+  // --- Sync metadata ---
+
+  /** ISO. Bumped on every local mutation; the basis for conflict resolution. */
+  updatedAt: string;
+
+  /**
+   * Soft delete. A hard delete cannot be synced — the row simply vanishes
+   * locally and the server, having never heard about it, pushes it straight
+   * back on the next pull. A tombstone is the only thing that propagates.
+   */
+  deletedAt: string | null;
+
+  /**
+   * When this row was last confirmed on the server. `null` means it has never
+   * synced. A row is dirty when `syncedAt` is null or older than `updatedAt` —
+   * derived rather than stored, so the two cannot drift apart.
+   */
+  syncedAt: string | null;
+}
+
+/** True when a row has local changes the server has not acknowledged. */
+export function isDirty(transaction: Transaction): boolean {
+  if (transaction.syncedAt === null) return true;
+  return transaction.updatedAt > transaction.syncedAt;
+}
+
+/** True when a row should be shown to the user. */
+export function isVisible(transaction: Transaction): boolean {
+  return transaction.deletedAt === null;
 }
 
 /**

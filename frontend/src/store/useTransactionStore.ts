@@ -1,4 +1,13 @@
 import { create } from 'zustand';
+
+/**
+ * Stamps a local edit. Every mutation must go through this — a row whose
+ * updatedAt was not bumped looks clean to the sync engine and its change is
+ * silently never pushed.
+ */
+function touch<T extends { updatedAt: string }>(row: T): T {
+  return { ...row, updatedAt: new Date().toISOString() };
+}
 import type { Transaction } from '../types/transaction';
 import { mockTransactions } from '../mock/transactions';
 import {
@@ -15,6 +24,10 @@ import {
 } from './database';
 import { persistDiff } from './persistence';
 import { useMerchantStore } from './useMerchantStore';
+import { runSync } from '../sync/syncEngine';
+import { nextWatermark, pendingPushCount } from '../sync/merge';
+import { readWatermark, writeWatermark } from '../sync/watermark';
+import { isSyncConfigured } from '../sync/supabaseClient';
 import {
   requestCategories,
   selectNeedingLlm,
@@ -71,6 +84,14 @@ interface TransactionState {
    */
   categorizePending: () => Promise<number>;
 
+  // --- Sync ---
+  syncing: boolean;
+  lastSyncedAt: string | null;
+  /** Rows waiting to be pushed. */
+  pendingPush: () => number;
+  /** Runs one pull/merge/push cycle. Safe to call when unconfigured. */
+  sync: () => Promise<void>;
+
   // --- Persistence ---
   /** True once hydration from SQLite has finished (or failed). */
   hydrated: boolean;
@@ -87,6 +108,8 @@ export const useTransactionStore = create<TransactionState>((set, get) => ({
   // rows would be a correctness bug, not just untidy.
   transactions: [],
   hydrated: false,
+  syncing: false,
+  lastSyncedAt: null,
 
   ingest: (event) => {
     let outcome = ingestEvent(event, get().transactions);
@@ -170,15 +193,22 @@ export const useTransactionStore = create<TransactionState>((set, get) => ({
 
     set((state) => ({
       transactions: state.transactions.map((transaction) =>
-        transaction.id === id ? { ...transaction, ...updates } : transaction,
+        transaction.id === id ? touch({ ...transaction, ...updates }) : transaction,
       ),
     }));
   },
 
   deleteTransaction: (id) => {
+    // Soft delete. A hard delete cannot be synced: the row vanishes locally
+    // and the server, never having heard about it, pushes it back on the next
+    // pull. The tombstone is what propagates; SELECT_ALL_SQL filters it out
+    // so the user never sees it again.
+    const now = new Date().toISOString();
     set((state) => ({
-      transactions: state.transactions.filter(
-        (transaction) => transaction.id !== id,
+      transactions: state.transactions.map((transaction) =>
+        transaction.id === id
+          ? { ...transaction, deletedAt: now, updatedAt: now }
+          : transaction,
       ),
     }));
   },
@@ -190,7 +220,7 @@ export const useTransactionStore = create<TransactionState>((set, get) => ({
     set((state) => ({
       transactions: state.transactions.map((transaction) =>
         transaction.id === id
-          ? {
+          ? touch({
               ...transaction,
               note: note.text,
               transcript: note.transcript,
@@ -199,7 +229,7 @@ export const useTransactionStore = create<TransactionState>((set, get) => ({
               // Answering the "what was this for" question is exactly what
               // takes a payment out of the queue.
               status: 'complete',
-            }
+            })
           : transaction,
       ),
     }));
@@ -209,11 +239,11 @@ export const useTransactionStore = create<TransactionState>((set, get) => ({
     set((state) => ({
       transactions: state.transactions.map((transaction) =>
         transaction.id === id
-          ? {
+          ? touch({
               ...transaction,
               skippedCount: transaction.skippedCount + 1,
               lastPromptedAt: new Date().toISOString(),
-            }
+            })
           : transaction,
       ),
     }));
@@ -222,7 +252,9 @@ export const useTransactionStore = create<TransactionState>((set, get) => ({
   ignoreTransaction: (id) => {
     set((state) => ({
       transactions: state.transactions.map((transaction) =>
-        transaction.id === id ? { ...transaction, status: 'ignored' } : transaction,
+        transaction.id === id
+          ? touch({ ...transaction, status: 'ignored' })
+          : transaction,
       ),
     }));
   },
@@ -235,7 +267,7 @@ export const useTransactionStore = create<TransactionState>((set, get) => ({
     set((state) => ({
       transactions: state.transactions.map((transaction) =>
         staleIds.has(transaction.id)
-          ? { ...transaction, status: 'needs_review' }
+          ? touch({ ...transaction, status: 'needs_review' })
           : transaction,
       ),
     }));
@@ -258,6 +290,30 @@ export const useTransactionStore = create<TransactionState>((set, get) => ({
 
   setTransactions: (transactions) => set({ transactions }),
 
+  pendingPush: () => pendingPushCount(get().transactions),
+
+  sync: async () => {
+    if (!isSyncConfigured() || get().syncing) return;
+
+    set({ syncing: true });
+    try {
+      const watermark = await readWatermark();
+      const outcome = await runSync(get().transactions, watermark);
+
+      if (!outcome.ran) return;
+
+      // Assigning the merged set wholesale is safe because runSync was given
+      // the current transactions and resolves every id present on either
+      // side; the persistence subscription then writes only what changed.
+      set({ transactions: outcome.transactions });
+
+      await writeWatermark(nextWatermark(outcome.transactions, watermark));
+      set({ lastSyncedAt: new Date().toISOString() });
+    } finally {
+      set({ syncing: false });
+    }
+  },
+
   categorizePending: async () => {
     if (!LLM_CATEGORIZATION_ENABLED) return 0;
 
@@ -278,7 +334,7 @@ export const useTransactionStore = create<TransactionState>((set, get) => ({
       transactions: state.transactions.map((transaction) => {
         const suggestion = byId.get(transaction.id);
         return suggestion
-          ? { ...transaction, category: suggestion.category }
+          ? touch({ ...transaction, category: suggestion.category })
           : transaction;
       }),
     }));
