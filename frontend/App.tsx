@@ -13,9 +13,11 @@ import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
 import { useTransactionStore } from './src/store/useTransactionStore';
+import { useMerchantStore } from './src/store/useMerchantStore';
 import { FloatingMic } from './src/components/FloatingMic';
 import { IngestionSetupCard } from './src/components/IngestionSetupCard';
 import { PendingQueueBanner } from './src/components/PendingQueueBanner';
+import { CategoryPicker } from './src/components/CategoryPicker';
 import { Transaction, TransactionCategory } from './src/types/transaction';
 
 import { parseVoiceToTransaction } from './src/utils/voiceParser';
@@ -63,11 +65,15 @@ export default function App() {
     null,
   );
 
-  // Load persisted transactions before anything else renders meaningfully.
-  // Runs once; hydrate() is idempotent.
+  const hydrateMerchants = useMerchantStore((state) => state.hydrate);
+
+  // Load persisted state before anything else renders meaningfully. Merchant
+  // memory must be loaded before ingestion runs, or the first captured
+  // payment would be categorised as if the user had taught us nothing.
   useEffect(() => {
     void hydrate();
-  }, [hydrate]);
+    void hydrateMerchants();
+  }, [hydrate, hydrateMerchants]);
 
   // Both ingestion channels run concurrently and write straight into the
   // store; dedupe in ingestion/dedupe.ts keeps one payment as one row.
@@ -76,6 +82,11 @@ export default function App() {
   const skipInQueue = useTransactionStore((state) => state.skipInQueue);
   const ignoreTransaction = useTransactionStore((state) => state.ignoreTransaction);
   const attachNote = useTransactionStore((state) => state.attachNote);
+  const updateTransaction = useTransactionStore((state) => state.updateTransaction);
+
+  // The transaction whose category the user is changing. Setting one teaches
+  // merchant memory, so every later payment to that merchant is automatic.
+  const [categorising, setCategorising] = useState<Transaction | null>(null);
   const pendingQueue = useTransactionStore((state) =>
     selectPendingQueue(state.transactions),
   );
@@ -159,11 +170,17 @@ export default function App() {
         <View style={styles.cardRow}>
           {/* Category Dot & Title */}
           <View style={styles.leftInfo}>
-            <View style={[styles.categoryBadge, { backgroundColor: `${categoryColor}20` }]}>
+            <TouchableOpacity
+              style={[styles.categoryBadge, { backgroundColor: `${categoryColor}20` }]}
+              onPress={() => setCategorising(item)}
+              accessibilityRole="button"
+              accessibilityLabel={`Change category, currently ${item.category}`}
+            >
               <Text style={[styles.categoryBadgeText, { color: categoryColor }]}>
                 {item.category}
               </Text>
-            </View>
+              <Ionicons name="chevron-down" size={11} color={categoryColor} />
+            </TouchableOpacity>
             <Text style={styles.txTitle} numberOfLines={1}>
               {item.title}
             </Text>
@@ -322,6 +339,18 @@ export default function App() {
 
           {/* Floating Mic with Live Streaming & Press-and-Hold */}
           <FloatingMic onTranscriptionComplete={handleVoiceComplete} />
+
+          <CategoryPicker
+            transaction={categorising}
+            onDismiss={() => setCategorising(null)}
+            onSelect={(category) => {
+              if (!categorising) return;
+              // updateTransaction teaches merchant memory when a category is
+              // set explicitly — see useTransactionStore.
+              updateTransaction(categorising.id, { category });
+              setCategorising(null);
+            }}
+          />
         </View>
       </SafeAreaView>
     </SafeAreaProvider>
@@ -487,6 +516,9 @@ const styles = StyleSheet.create({
   },
   categoryBadge: {
     alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 6,

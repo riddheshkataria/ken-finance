@@ -14,6 +14,7 @@ import {
   saveTransactions,
 } from './database';
 import { persistDiff } from './persistence';
+import { useMerchantStore } from './useMerchantStore';
 import type { IngestionEvent } from '../ingestion/types';
 import {
   selectCaptureTarget,
@@ -75,13 +76,27 @@ export const useTransactionStore = create<TransactionState>((set, get) => ({
   hydrated: false,
 
   ingest: (event) => {
-    const outcome = ingestEvent(event, get().transactions);
+    let outcome = ingestEvent(event, get().transactions);
 
     if (outcome.kind === 'created') {
+      // Apply what the user has already taught us about this merchant. The
+      // parser's keyword guess is only a fallback — a category the user set
+      // themselves is the whole point of merchant memory, and re-asking for
+      // a merchant they have already categorised is the tedium being fixed.
+      const resolution = useMerchantStore
+        .getState()
+        .resolve(outcome.transaction.paidTo);
+
+      const transaction =
+        resolution.category !== null
+          ? { ...outcome.transaction, category: resolution.category }
+          : outcome.transaction;
+
+      outcome = { kind: 'created', transaction };
       // A new bank event may still match a voice note the user recorded
       // moments earlier — reconciliation runs before it is stored.
       const { matched, mergedTransaction } = get().addBankTransaction(
-        outcome.transaction,
+        transaction,
       );
       return matched && mergedTransaction
         ? { kind: 'duplicate', merged: mergedTransaction }
@@ -130,6 +145,16 @@ export const useTransactionStore = create<TransactionState>((set, get) => ({
   },
 
   updateTransaction: (id, updates) => {
+    // A category the user set by hand is a teaching signal: remember it so
+    // this merchant is never asked about again.
+    if (updates.category) {
+      const existing = get().getTransactionById(id);
+      const merchant = updates.paidTo ?? existing?.paidTo;
+      if (merchant) {
+        useMerchantStore.getState().learn(merchant, updates.category);
+      }
+    }
+
     set((state) => ({
       transactions: state.transactions.map((transaction) =>
         transaction.id === id ? { ...transaction, ...updates } : transaction,

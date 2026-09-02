@@ -178,6 +178,28 @@ second store.
 
 ---
 
+### F. Merchant memory (`merchants/`, `store/useMerchantStore.ts`)
+
+Categorise a merchant once, and every later payment to it is automatic. Three
+tiers, resolved cheapest first: **user memory → shipped dictionary → null**.
+Returning null rather than guessing keeps a wrong category from being silently
+applied.
+
+The load-bearing piece is `merchants/normalize.ts`. The same shop arrives as
+`swiggy@ybl`, `UPI/SWGY*ORDER/123456`, `SWIGGY LIMITED` and `Swiggy` depending
+on channel, and all four must collapse to one key or memory never hits. The
+opposite failure matters just as much: `Swiggy` and `Swiggy Instamart` are
+different businesses in different categories, so descriptive words are
+preserved and only legal suffixes and payment-rail noise are stripped.
+`AMBIGUOUS_PREFIXES` stops a bare prefix match filing an Instamart grocery run
+as Dining.
+
+Learning is wired to `updateTransaction` — setting a category by hand is the
+teaching signal. The `CategoryPicker` sheet is what makes that reachable;
+without it the memory could never fill up.
+
+---
+
 ## 6. Current Status
 
 All of the below is merged to `main`.
@@ -190,9 +212,10 @@ All of the below is merged to `main`.
 | Setup + queue UI | Done — typechecks, not exercised on a device |
 | Native module (Kotlin) | Written, **never compiled** — no Android SDK on the authoring machine |
 | Widget + voice capture | Written, **never run** |
-| Persistence | Done — SQLite, write-through, 20 tests |
+| Persistence | Done — SQLite, write-through, 20 tests (schema v2) |
 | Backend / Supabase | Not started — Express has a health route only |
-| Merchant memory / LLM categorization | Not started |
+| Merchant memory | Done — 19 tests |
+| LLM categorization | Not started |
 | Budgets & analytics | Not started |
 
 ### The honest summary
@@ -210,8 +233,8 @@ like it is working while capturing nothing — check this explicitly rather than
 inferring from the UI.
 
 **Next steps:** see `todo_next.md`. In short — compile the Kotlin if you have an
-Android SDK; otherwise build merchant memory, which is unblocked and removes
-most of the categorization tedium without needing a device.
+Android SDK; otherwise the next unblocked work is the LLM fallback for
+merchants that neither the dictionary nor user memory knows (Task D).
 
 ## 7. Guidelines for Agents & Teammates
 
