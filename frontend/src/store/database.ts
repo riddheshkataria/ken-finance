@@ -21,10 +21,14 @@ import {
   UPSERT_TRANSACTION_SQL,
   SELECT_MERCHANTS_SQL,
   UPSERT_MERCHANT_SQL,
+  SELECT_BUDGETS_SQL,
+  UPSERT_BUDGET_SQL,
+  DELETE_BUDGET_SQL,
   fromRow,
   merchantFromRow,
   merchantToBindParams,
   toBindParams,
+  type BudgetRow,
   type MerchantRow,
   type TransactionRow,
 } from './schema';
@@ -198,6 +202,46 @@ export async function deleteAllMerchants(): Promise<void> {
     await database.runAsync(DELETE_ALL_MERCHANTS_SQL);
   } catch (error) {
     console.warn('[ken] Failed to clear merchant memory', error);
+  }
+}
+
+// --- Budgets -------------------------------------------------------------
+
+export async function loadBudgets(): Promise<BudgetRow[]> {
+  if (!database) return [];
+
+  try {
+    return await database.getAllAsync<BudgetRow>(SELECT_BUDGETS_SQL);
+  } catch (error) {
+    console.warn('[ken] Failed to load budgets', error);
+    return [];
+  }
+}
+
+export async function saveBudget(
+  category: string,
+  amountMinor: number,
+): Promise<void> {
+  if (!database) return;
+
+  try {
+    await database.runAsync(UPSERT_BUDGET_SQL, [
+      category,
+      amountMinor,
+      new Date().toISOString(),
+    ]);
+  } catch (error) {
+    console.warn('[ken] Failed to save budget', category, error);
+  }
+}
+
+export async function deleteBudget(category: string): Promise<void> {
+  if (!database) return;
+
+  try {
+    await database.runAsync(DELETE_BUDGET_SQL, [category]);
+  } catch (error) {
+    console.warn('[ken] Failed to delete budget', category, error);
   }
 }
 

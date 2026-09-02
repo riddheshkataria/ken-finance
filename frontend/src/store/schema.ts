@@ -19,7 +19,7 @@ import type {
 import type { MerchantMemory } from '../merchants/lookup';
 
 /** Bumped whenever MIGRATIONS gains an entry. */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 /**
  * Ordered migrations, applied by PRAGMA user_version.
@@ -72,6 +72,17 @@ export const MIGRATIONS: readonly string[] = [
     display_name TEXT NOT NULL,
     category     TEXT NOT NULL,
     seen_count   INTEGER NOT NULL DEFAULT 1,
+    updated_at   TEXT NOT NULL
+  );
+  `,
+
+  // v3 — monthly budgets. One row per category; absence means no budget,
+  // which is different from a budget of zero.
+  `
+  CREATE TABLE IF NOT EXISTS budgets (
+    category     TEXT PRIMARY KEY NOT NULL,
+    -- Integer paise per month, like every other amount (rules.md §1).
+    amount_minor INTEGER NOT NULL,
     updated_at   TEXT NOT NULL
   );
   `,
@@ -177,6 +188,26 @@ export function merchantToBindParams(memory: MerchantMemory): unknown[] {
     memory.updatedAt,
   ];
 }
+
+// --- Budgets -------------------------------------------------------------
+
+export interface BudgetRow {
+  category: string;
+  amount_minor: number;
+  updated_at: string;
+}
+
+export const SELECT_BUDGETS_SQL = 'SELECT * FROM budgets;';
+
+export const UPSERT_BUDGET_SQL = `
+INSERT INTO budgets (category, amount_minor, updated_at)
+VALUES (?, ?, ?)
+ON CONFLICT(category) DO UPDATE SET
+  amount_minor = excluded.amount_minor,
+  updated_at = excluded.updated_at;
+`;
+
+export const DELETE_BUDGET_SQL = 'DELETE FROM budgets WHERE category = ?;';
 
 export function merchantFromRow(row: MerchantRow): MerchantMemory {
   return {
