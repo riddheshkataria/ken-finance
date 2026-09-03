@@ -40,15 +40,17 @@ const CATEGORIES: readonly TransactionCategory[] = [
 ];
 
 export interface InsightsPanelProps {
-  visible: boolean;
+  visible?: boolean;
+  isModal?: boolean;
   transactions: readonly Transaction[];
   budgets: BudgetMap;
   onSetBudget: (category: TransactionCategory, amountMinor: number) => void;
-  onClose: () => void;
+  onClose?: () => void;
 }
 
 export const InsightsPanel: React.FC<InsightsPanelProps> = ({
-  visible,
+  visible = true,
+  isModal = false,
   transactions,
   budgets,
   onSetBudget,
@@ -98,20 +100,23 @@ export const InsightsPanel: React.FC<InsightsPanelProps> = ({
     setDraftAmount('');
   };
 
-  return (
-    <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
-      <View style={styles.container}>
+  const content = (
+    <View style={styles.container}>
+      {isModal && (
         <View style={styles.header}>
           <View>
             <Text style={styles.title}>Insights</Text>
             <Text style={styles.subtitle}>{periodLabel(period)}</Text>
           </View>
-          <Pressable onPress={onClose} accessibilityLabel="Close insights">
-            <Ionicons name="close" size={26} color="#6B7280" />
-          </Pressable>
+          {onClose && (
+            <Pressable onPress={onClose} accessibilityLabel="Close insights">
+              <Ionicons name="close" size={26} color="#6B7280" />
+            </Pressable>
+          )}
         </View>
+      )}
 
-        <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
+      <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
           {/* The one number people actually act on. */}
           {overall.budgetMinor > 0 && (
             <View style={styles.heroCard}>
@@ -316,8 +321,8 @@ export const InsightsPanel: React.FC<InsightsPanelProps> = ({
           <View style={styles.bottomSpace} />
         </ScrollView>
 
-        {/* Budget editor */}
-        <Modal visible={editing !== null} transparent animationType="fade">
+        {/* Budget editor overlay (in-place overlay avoids nested Modal crash in React 19) */}
+        {editing !== null && (
           <Pressable style={styles.editorBackdrop} onPress={() => setEditing(null)}>
             <Pressable style={styles.editor} onPress={(e) => e.stopPropagation()}>
               <Text style={styles.editorTitle}>{editing} budget</Text>
@@ -343,10 +348,19 @@ export const InsightsPanel: React.FC<InsightsPanelProps> = ({
               </View>
             </Pressable>
           </Pressable>
-        </Modal>
+        )}
       </View>
-    </Modal>
   );
+
+  if (isModal) {
+    return (
+      <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
+        {content}
+      </Modal>
+    );
+  }
+
+  return content;
 };
 
 const PaceBar: React.FC<{ label: string; fraction: number; color: string }> = ({
@@ -489,10 +503,15 @@ const styles = StyleSheet.create({
   bottomSpace: { height: 40 },
 
   editorBackdrop: {
-    flex: 1,
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    left: 0,
+    right: 0,
     backgroundColor: 'rgba(15,23,42,0.45)',
     justifyContent: 'center',
-    padding: 32,
+    padding: 24,
+    zIndex: 1000,
   },
   editor: { backgroundColor: '#FFFFFF', borderRadius: 16, padding: 20 },
   editorTitle: { fontSize: 17, fontWeight: '700', color: '#0F172A' },
