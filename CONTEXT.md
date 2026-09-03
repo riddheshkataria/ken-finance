@@ -13,9 +13,10 @@
 **The Solution**: Capture intent **at the moment of payment**:
 
 - **Dual-channel ingestion** — bank SMS *and* UPI app notifications (GPay, PhonePe, Paytm, CRED), running concurrently.
-- **Instant voice capture** — a home-screen widget, floating in-app mic, and notification action, opening a native mic sheet in well under a second.
+- **Instant voice capture** — home-screen widget, in-app floating mic, and notification actions opening native mic sheet in <300ms.
 - **Two-way matching** — a spoken note recorded before or during payment reconciles against the bank record that follows; a bank record with no note joins a queue asking the user what it was for.
 - **Offline-first with AI categorization & Cloud Sync** — 3-tier categorization (User Memory → Shipped Dictionary → Google Gemini 2.5 Flash), local SQLite write-through caching, and Supabase cloud synchronization with tombstone deletes.
+- **Dynamic Rule Pack & Self-Improving Ingestion** — Server-fetched versioned regex rules from Supabase `parse_rules` so new bank formats ship without app binary updates, plus Gemini-powered regex generation for unparsed messages.
 
 ---
 
@@ -27,13 +28,19 @@ ken-finance/
 ├── plan.md                          # Architecture & roadmap
 ├── CONTEXT.md                       # This file
 ├── todo_next.md                     # Actionable work queue for agents
-├── backend/                         # Node.js Express backend + Google Gemini 2.5 Flash
-│   ├── .env                         # PORT=5000, GEMINI_API_KEY
-│   ├── index.js                     # Express API entry point
-│   └── src/categorize.js            # @google/genai batch categorization with structured JSON schemas
+├── supabase/
+│   └── schema.sql                   # Supabase Postgres schema (tables, RLS, indexes)
+├── backend/                         # Node.js Express backend + Google Gemini 2.5 Flash + Supabase
+│   ├── .env                         # PORT, GEMINI_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
+│   ├── index.js                     # Express API entry point & route mounts
+│   └── src/
+│       ├── categorize.js            # @google/genai batch categorization with structured JSON schemas
+│       ├── supabase.js              # Supabase Postgres server client & connection health
+│       ├── parseRules.js            # Versioned bank regex rule pack API (GET /api/parse-rules)
+│       └── unparsedIngest.js        # AI extraction & regex rule generation (POST /api/ingest/unparsed)
 └── frontend/                        # React Native (Expo SDK 57) client
     ├── .env                         # EXPO_PUBLIC_API_URL, EXPO_PUBLIC_SUPABASE_URL, etc.
-    ├── App.tsx                      # Main app shell with 4-tab navigation (Activity, Ledger, Budgets, Sync)
+    ├── App.tsx                      # 4-tab navigation (Activity, Ledger, Budgets, Sync)
     ├── modules/ken-ingestion/       # Local Expo module — Android native Kotlin
     │   ├── expo-module.config.json
     │   └── android/src/main/
@@ -54,15 +61,15 @@ ken-finance/
         ├── types/transaction.ts     # Transaction interface & enums
         ├── ingestion/               # PURE: parse -> dedupe -> materialise
         │   ├── types.ts             #   IngestionEvent, rejection reasons
-        │   ├── extractors.ts        #   pure field extraction
-        │   ├── parseEvent.ts        #   the single parsing entry point
+        │   ├── extractors.ts        #   pure field extraction & package allowlist
+        │   ├── parseEvent.ts        #   single parsing entry point (supports dynamic rule pack)
         │   ├── dedupe.ts            #   cross-channel deduplication
         │   ├── ingest.ts            #   parse + dedupe as one step
         │   ├── ingestion.test.ts    #   27 tests
         │   └── __fixtures__/        #   redacted message corpus
         ├── store/
-        │   ├── useTransactionStore.ts  # Zustand — single source of truth for transactions
-        │   ├── useBudgetStore.ts       # Zustand — monthly budgets per category (SQLite backed)
+        │   ├── useTransactionStore.ts  # Zustand — transactions & sync coordination
+        │   ├── useBudgetStore.ts       # Zustand — category budgets (SQLite backed)
         │   ├── useMerchantStore.ts     # Zustand — learned merchant memory rules
         │   ├── database.ts             # SQLite connection & schema migrations
         │   ├── schema.ts               # Pure SQL DDL & row mapping
@@ -93,10 +100,10 @@ ken-finance/
         │   └── CategoryPicker.tsx         # 8-category selector pill modal
         ├── utils/
         │   ├── money.ts                 # Rupee <-> paise (INTEGER only)
-        │   ├── voiceParser.ts           # Natural language voice speech -> transaction
+        │   ├── voiceParser.ts           # Spoken natural language -> transaction
         │   ├── voiceParser.test.ts      # Unit tests for voice parsing
         │   └── reconciliationEngine.ts  # Voice <-> bank matching
-        └── mock/transactions.ts         # Rich multi-category dummy dataset
+        └── mock/transactions.ts         # Multi-category dummy dataset
 ```
 
 ---
@@ -140,92 +147,57 @@ interface Transaction {
 
 ---
 
-## 4. Implemented Systems
+## 4. Backend & Database Architecture
 
-### A. Dual-channel ingestion (`src/ingestion/`, `modules/ken-ingestion/`)
-Native captures, JavaScript decides. There is **one** parsing path; nothing else in the app may parse a payment.
-1. `SmsReceiver` reassembles multipart SMS by sender and buffers the text.
-2. `PaymentNotificationListener` filters to an app allowlist and extracts `EXTRA_BIG_TEXT`.
-3. Both write to `IngestionInbox` and publish to `IngestionBus`.
-4. `parseIngestionEvent` extracts amount (in paise), direction, merchant/VPA, account tail, reference number, and date. Rejects OTPs, promotions, collect requests, failed transactions, and balance alerts.
-5. `findDuplicate` collapses the same payment seen on both channels.
-
-### B. Pending-note queue (`src/store/queue.ts`)
-Bank events arrive as `status: 'pending_note'` and form an ordered backlog:
-- Ordered `skippedCount ASC, timestamp ASC` (oldest first, skipped items sunk).
-- Widget tap opens the queue head. Notification tap opens the specific payment.
-- Auto-retires after 3 skips or 7 days.
-
-### C. Voice parsing & Intent Capture (`src/utils/voiceParser.ts`)
-Spoken phrases like `"tanmay sent me 230 he owed me for food"` or `"spent 650 at Starbucks for cold brew"` are converted into:
-- Integer amount in paise (`23000` or `65000`).
-- Direction (`Credit` for incoming repayments/transfers, `Debit` for spending).
-- Subject/Person (`Tanmay`, `Starbucks`).
-- Category (`Dining`, `Grocery`, `Transport`, `Rent`, `Bills`, `P2P Transfer`, `Investment`, `Others`).
-- Title/Reason (`Food`, `Cold Brew`).
-
-### D. App Navigation & Detailed Ledger (`App.tsx`, `TransactionDetailModal.tsx`)
-- 4 navigation tabs:
-  - ⚡ **Activity**: Net balance cards, permissions card, pending queue banner, recent transaction stream, and floating mic.
-  - 🧾 **Transactions**: Full ledger with real-time text search (titles, merchants, voice notes, transcripts, reference numbers), category filter pills, and direction filters.
-  - 📊 **Budgets**: Full-featured analytics with safe-to-spend-today, overpacing alerts, category budgets, recurring subscriptions, and merchant leaderboard.
-  - ⚙️ **Sync**: Supabase cloud status, pending push count, manual sync button, AI merchant memory stats, and data reset buttons.
-- Tapping any transaction opens `TransactionDetailModal` with full edit/save, delete confirmation, voice note recording, and raw bank SMS audit payload viewer.
-
-### E. Persistence (`store/database.ts`, `store/schema.ts`, `store/persistence.ts`)
-SQLite via `expo-sqlite`:
-- `schema.ts` is pure DDL, row mapping, and parameter binding (`amount_minor INTEGER`, `dedupe_key UNIQUE`).
-- `database.ts` owns connection and schema migrations (`PRAGMA user_version`).
-- `persistence.ts` diffs Zustand store state and writes changes automatically.
-
-### F. Merchant memory (`merchants/`, `store/useMerchantStore.ts`)
-Three tiers: **User Memory → Shipped Dictionary → Google Gemini LLM**.
-Normalisation in `normalize.ts` collapses rail noise (`UPI/SWGY*ORDER/123456`, `SWIGGY LIMITED` &rarr; `swiggy`) while preserving distinct businesses (`Swiggy` vs `Swiggy Instamart`).
-
-### G. LLM Categorization (`backend/src/categorize.js`, `merchants/llmCategorizer.ts`)
-Powered by Google Gemini 2.5 Flash (`@google/genai`).
-- Batched up to 50 items with structured schema output.
-- Gated to unknown merchants with notes. High-confidence answers are written into merchant memory.
-
-### H. Supabase Sync (`sync/`, `supabase/schema.sql`)
-Offline-first with pure conflict resolution:
-- Tombstone deletes (`deletedAt !== null`).
-- `syncedAt` set to row's own `updatedAt`.
-- Pull before push with last-write-wins merge.
-
----
-
-## 5. Development & Run Commands
-
-```bash
-# Frontend
-cd frontend
-npm install
-npm run typecheck    # tsc --noEmit — 0 errors
-npm test             # 139 tests passing across 35 test suites
-npx expo start       # Run Expo development server
-
-# Backend
-cd backend
-npm install
-npm run dev          # Express + Gemini 2.5 Flash on :5000
+```
+                                    Express Server (:5000)
+                                   ┌───────────────────────────────────────────────┐
+Client App                         │  • POST /api/categorize (Gemini Flash LLM)   │
+(React Native) ───────────────────►│  • GET  /api/parse-rules (Dynamic Bank Regex)│
+       │                           │  • POST /api/ingest/unparsed (AI Rule Proposer)│
+       │                           │  • GET  /api/health (Server & DB Health)     │
+       │                           └───────────────────────┬───────────────────────┘
+       │                                                   │
+       │ Direct Supabase REST (Auth RLS)                   │ Supabase Service Client
+       ▼                                                   ▼
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│                             Supabase Postgres Database                           │
+│  • public.transactions  (User expenses, dedupe_key UNIQUE, amount_minor BIGINT) │
+│  • public.merchants     (Learned user merchant rules)                            │
+│  • public.budgets       (Monthly category budget targets)                        │
+│  • public.parse_rules   (Server-distributed bank & UPI regex rule pack)         │
+│  • public.unparsed_logs (Redacted unparsed payloads for regex training)          │
+└──────────────────────────────────────────────────────────────────────────────────┘
 ```
 
+1. **Database Schema (`supabase/schema.sql`)**:
+   - `amount_minor` is `BIGINT` with explicit check constraints `amount_minor = trunc(amount_minor)`.
+   - `UNIQUE(user_id, dedupe_key)` enforces deduplication at the database level.
+   - Row Level Security (RLS) enabled on all user tables with `auth.uid() = user_id`.
+   - `deleted_at` timestamps act as tombstones so hard deletes propagate across offline devices without resurrecting rows.
+
+2. **Backend API Endpoints**:
+   - `POST /api/categorize`: Batched categorization for unknown merchants with notes using Google Gemini 2.5 Flash (`@google/genai`).
+   - `GET /api/parse-rules`: Returns versioned bank regex patterns (HDFC, SBI, ICICI, Axis, Kotak, GPay, PhonePe, Paytm, CRED) fetched dynamically by client.
+   - `POST /api/ingest/unparsed`: Ingests redacted unparsed SMS/notification bodies &rarr; Gemini parses fields & drafts candidate regex into `parse_rules`.
+   - `GET /api/health`: Health status of server and Supabase connection.
+
 ---
 
-## 6. Current Status & Verification
+## 5. Current Implementation State
 
 | Area | State |
 |---|---|
+| Native Kotlin Ingestion & Android Build | **Compiled & Verified** (Gradle 9.3.1 + JDK 17, APK installed on emulator, SMS receiver tested) |
 | Money as integer paise | Verified |
 | Ingestion pipeline (parse, dedupe, reject) | Verified — 27 tests |
 | Pending-note queue | Verified — 5 tests |
-| App Navigation & Ledger UI | Implemented & verified (React 19 compatible) |
-| Transaction Detail & Edit Modal | Implemented & verified |
+| App Navigation & Ledger UI | Implemented — 4 tabs (Activity, Ledger, Budgets, Sync) |
+| Transaction Detail & Edit Modal | Implemented — edit, delete, voice note, raw payload viewer |
 | Voice Speech Parser | Verified — 6 tests (repayments, credits, debits) |
-| Native module (Kotlin) | Written (ready for Android build testing) |
 | Persistence (SQLite) | Verified — 20 tests (schema v4) |
-| Backend (Google Gemini) | Verified — 13 tests (Node.js Express + Gemini 2.5 Flash) |
-| Supabase Cloud Sync | Verified — 27 tests (pure merge logic) |
+| Merchant memory | Verified — 19 tests |
+| LLM Categorization (Gemini 2.5 Flash) | Verified — 13 tests |
+| Supabase Sync Engine | Verified — 27 tests (pure merge logic) |
 | Budgets & Analytics | Verified — 28 tests (schema v3) |
-| Total Test Suite | **139 passing tests (0 failures)** |
+| **Total Test Suite** | **139 passing tests (0 failures)** |

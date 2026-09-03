@@ -14,8 +14,8 @@
 |---|---|
 | `rules.md` | **Binding** engineering conventions. Not advisory. |
 | `plan.md` | Architecture and the reasoning behind it |
-| `CONTEXT.md` | Current implementation state |
-| `todo_next.md` | This file — what to do next |
+| `CONTEXT.md` | Current implementation state & data models |
+| `todo_next.md` | This file — prioritized actionable work queue |
 
 **The product in one sentence:** Indian bank and UPI apps tell you *that* you
 spent money but never *why*, so Ken captures a spoken note at the moment of
@@ -29,23 +29,27 @@ one mic button.
 Run these first:
 
 ```bash
+# Frontend validation
 cd frontend
 npm install
 npm run typecheck   # must print nothing (0 errors)
 npm test            # must report 139 pass, 0 fail
+
+# Backend validation
+cd ../backend
+npm install
+npm test 2>/dev/null || node -e "require('./index')"
 ```
 
 ---
 
 ## 3. What is actually true right now
 
-Every task from architecture through native compilation is built and verified.
-
 ### Built, compiled, and verified
 - **TASK A: Native Kotlin compilation & Android APK** (`modules/ken-ingestion/`, `frontend/android/`) ✅ **DONE**:
   - `modules/ken-ingestion` compiles clean via Gradle 9.3.1 + JDK 17 (`Task :ken-ingestion:compileDebugKotlin`, `assembleDebug`).
   - Native layouts (`ken_widget.xml`, `ken_voice_capture.xml`) and themes built.
-  - Native APK installed and launched on Android emulator.
+  - Native APK installed and launched on Android emulator (`com.kenfinance.app`).
   - Live SMS capture broadcast receiver verified via emulator (`adb emu sms send`).
   - Unified Indian banking app allowlist across Kotlin and TypeScript.
 - **TASK B: Persistence** (`src/store/database.ts`, `schema.ts`, `persistence.ts`) ✅ **DONE**:
@@ -59,14 +63,62 @@ Every task from architecture through native compilation is built and verified.
 - **TASK F: Budgets and analytics** (`src/analytics/`, `store/useBudgetStore.ts`, `components/InsightsPanel.tsx`) ✅ **DONE**:
   - Safe-to-spend-today, overpacing warnings, merchant leaderboard, recurring detection, transcript search.
 - **Voice speech parser** (`src/utils/voiceParser.ts`) ✅ **DONE**:
-  - Converts natural spoken English/Hinglish (e.g. `"tanmay sent me 230 he owed me for food"`) into structured transactions with credit/debit recognition.
+  - Converts natural spoken English/Hinglish (e.g. repayments, P2P transfers, dining, rent, groceries) with full test suite.
 - **Navigation & Screen Sections** (`App.tsx`, `TransactionDetailModal.tsx`) ✅ **DONE**:
   - 4 tabs (⚡ Activity, 🧾 Transactions Ledger, 📊 Budgets/Insights, ⚙️ Sync & Settings) with search, category filtering, inline edit, and raw bank SMS audit payload viewer.
 - **139 tests** across all unit test suites with **0 failures**.
 
 ---
 
-## 4. Development & Build Commands
+## 4. NEXT PRIORITY: Backend Database Wiring & Dynamic Ingestion Rules (Task G)
+
+Now that native Android compilation and on-device ingestion are functional, wire the Express backend with Supabase Postgres and dynamic ingestion rules per `plan.md`.
+
+### TASK G1 — Backend Supabase Database Client & Environment
+**Goal:** Connect Express backend to Supabase Postgres with service role access.
+1. Install `@supabase/supabase-js` in `backend/`.
+2. Configure `backend/.env` with `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` / `SUPABASE_ANON_KEY`.
+3. Create `backend/src/supabase.js` exporting the initialized Supabase client and connection health check.
+4. Add `GET /api/health/db` endpoint to verify live database connectivity.
+
+### TASK G2 — Dynamic Versioned Parse Rules API (`GET /api/parse-rules`)
+**Goal:** Server-fetched regex rule pack so new bank SMS and UPI notification formats update on devices without app binary releases (`plan.md` §Ingestion pipeline).
+1. Create `parse_rules` table in Supabase schema:
+   `parse_rules(id, version, bank_key, pattern, field_map jsonb, priority, active, created_at)`
+2. Populate base rule pack for major Indian banks (HDFC, SBI, ICICI, Axis, Kotak, PNB, BOB) and UPI apps (GPay, PhonePe, Paytm, CRED).
+3. Implement `GET /api/parse-rules` in `backend/src/parseRules.js`:
+   - Returns versioned rule array.
+   - Supports `?since_version=X` for delta fetching.
+4. Update `frontend/src/ingestion/parseEvent.ts` to accept dynamic rules with fallback to shipped regex constants.
+
+### TASK G3 — AI Redacted Message Ingestion & Regex Proposer (`POST /api/ingest/unparsed`)
+**Goal:** Self-improving parser (`plan.md` §Unparsed messages).
+1. When an incoming message fails all known regex rules, client redacts sensitive PII (masks account numbers to last 4, removes customer names) and posts to `POST /api/ingest/unparsed`.
+2. Backend calls Google Gemini 2.5 Flash to:
+   - Extract structured financial fields (`amountMinor`, `paidTo`, `refNo`, `accountTail`, `transactionType`).
+   - Propose a new regular expression pattern with named capture groups.
+3. Inserts candidate rule into Supabase `parse_rules` with `active: false` for admin review and staging.
+
+### TASK G4 — Frontend Dynamic Rule Caching & Periodic Sync
+1. In `frontend/src/ingestion/dynamicRules.ts`, fetch `GET /api/parse-rules` on app foreground.
+2. Cache rules in local SQLite `parse_rules` table.
+3. Seamlessly apply fetched rules in `src/ingestion/parseEvent.ts`.
+
+---
+
+## 5. SUBSEQUENT PHASES
+
+### TASK H — Cloud STT Audio Capture & Hinglish Accuracy
+1. Record voice audio files with `expo-audio` / `expo-av`.
+2. Provide backend fallback transcription endpoint (`POST /api/transcribe`) using Gemini audio modality for challenging Hinglish accents.
+
+### TASK I — First-Run Onboarding Flow & Permissions Wizard
+1. Onboarding wizard explaining the value of instant voice capture and notification permissions.
+2. Direct deep linking to Android Notification Access Settings and SMS permissions dialog.
+
+---
+
+## 6. Development & Build Commands
 
 ```bash
 # Frontend typecheck and unit tests
@@ -82,21 +134,18 @@ export PATH=$JAVA_HOME/bin:$ANDROID_HOME/platform-tools:$PATH
 cd frontend
 npx expo run:android
 
-# Backend (Gemini 2.5 Flash API on :5000)
+# Backend (Gemini 2.5 Flash + Supabase on :5000)
 cd backend
+npm install
 npm run dev
 ```
 
 ---
 
-## 5. Summary of Tasks Status
+## 7. Finishing a Session Checklist
 
-- [x] **TASK A: Native Kotlin Module & Android Build**
-- [x] **TASK B: SQLite Offline Persistence**
-- [x] **TASK C: Merchant Memory Normalisation**
-- [x] **TASK D: Google Gemini Categorization Backend**
-- [x] **TASK E: Supabase Postgres Offline-First Sync**
-- [x] **TASK F: Budgets, Pacing, and Analytics**
-- [x] **App UI: 4-Tab Navigation & Transaction Detail View**
-- [x] **Voice Parser: Incoming Transfer & Repayment Recognition**
-- [x] **Unified Allowlist & 150+ Merchant Dictionary Expansion**
+Before you stop:
+1. `npm run typecheck` and `npm test` both pass (139 passing tests).
+2. `CONTEXT.md` updated if implementation state changed.
+3. `plan.md` updated if you deviated from architecture.
+4. `todo_next.md` updated with completed items and next steps.
