@@ -259,12 +259,12 @@ Merged to `main`. `backend/src/categorize.js` plus
 
 **Verified:** endpoint validation, batch cap, graceful 503, request shape,
 enum-drift rejection, network-failure fallback.
-**Not verified:** a real Claude call has never run — there was no API key on
+**Not verified:** a real Gemini call has never run — there was no API key on
 the authoring machine. The request shape follows the current SDK docs but has
 never had a live response.
 
 To turn it on: copy `backend/.env.example` to `backend/.env` and set
-`ANTHROPIC_API_KEY`. Without it the app still works; the user categorises
+`GEMINI_API_KEY`. Without it the app still works; the user categorises
 manually and merchant memory learns from that.
 
 **Two things not to undo:**
@@ -277,9 +277,8 @@ manually and merchant memory learns from that.
    model mistake apply to every future payment to that merchant — and since
    memory outranks the dictionary, it can override a correct shipped answer.
 
-Open: cost has never been measured against real traffic. `claude-opus-5` at
-`effort: 'low'` is the current choice; `claude-haiku-4-5` is ~5x cheaper and
-may be adequate. Decide with data, not upfront.
+Open: cost has never been measured against real traffic. `gemini-2.5-flash` is
+the current choice. Decide with data, not upfront.
 
 ---
 

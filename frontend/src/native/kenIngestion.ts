@@ -9,7 +9,14 @@
  * Every function here degrades gracefully when the native module is absent
  * (web, or a build without the module linked) so the app still runs.
  */
-import { NativeEventEmitter, NativeModules, PermissionsAndroid, Platform } from 'react-native';
+import {
+  Alert,
+  Linking,
+  NativeEventEmitter,
+  NativeModules,
+  PermissionsAndroid,
+  Platform,
+} from 'react-native';
 import type { IngestionEvent } from '../ingestion/types';
 
 /** Shape the Kotlin module emits and stores. */
@@ -78,7 +85,7 @@ const nativeModule: KenIngestionNativeModule | undefined =
   NativeModules.KenIngestion;
 
 export const isNativeIngestionAvailable = (): boolean =>
-  Platform.OS === 'android' && nativeModule !== undefined;
+  Platform.OS === 'android';
 
 /** Emitted when a payment is captured while the app is in the foreground. */
 export const INGESTION_EVENT = 'KenIngestion.event';
@@ -97,29 +104,68 @@ export function addIngestionListener(
 }
 
 /**
- * RECEIVE_SMS and READ_SMS are ordinary runtime permissions, so React
- * Native's own helper is enough once the manifest declares them — which is
- * exactly what was missing before and made every request fail instantly.
+ * RECEIVE_SMS and READ_SMS are runtime permissions on Android.
+ * If not granted or blocked, prompts user to open system App Settings.
  */
 export async function requestSmsPermission(): Promise<boolean> {
-  if (Platform.OS !== 'android') return false;
+  if (Platform.OS !== 'android') {
+    Alert.alert('SMS Access', 'SMS ingestion is only available on Android devices.');
+    return false;
+  }
 
-  const granted = await PermissionsAndroid.requestMultiple([
-    PermissionsAndroid.PERMISSIONS.RECEIVE_SMS,
-    PermissionsAndroid.PERMISSIONS.READ_SMS,
-  ]);
+  try {
+    const granted = await PermissionsAndroid.requestMultiple([
+      PermissionsAndroid.PERMISSIONS.RECEIVE_SMS,
+      PermissionsAndroid.PERMISSIONS.READ_SMS,
+    ]);
 
-  return (
-    granted[PermissionsAndroid.PERMISSIONS.RECEIVE_SMS] ===
-      PermissionsAndroid.RESULTS.GRANTED &&
-    granted[PermissionsAndroid.PERMISSIONS.READ_SMS] ===
-      PermissionsAndroid.RESULTS.GRANTED
-  );
+    const isGranted =
+      granted[PermissionsAndroid.PERMISSIONS.RECEIVE_SMS] ===
+        PermissionsAndroid.RESULTS.GRANTED &&
+      granted[PermissionsAndroid.PERMISSIONS.READ_SMS] ===
+        PermissionsAndroid.RESULTS.GRANTED;
+
+    if (!isGranted) {
+      const receiveStatus = granted[PermissionsAndroid.PERMISSIONS.RECEIVE_SMS];
+      const readStatus = granted[PermissionsAndroid.PERMISSIONS.READ_SMS];
+
+      if (
+        receiveStatus === PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN ||
+        readStatus === PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN
+      ) {
+        Alert.alert(
+          'SMS Permission Required',
+          'To capture bank transactions, please enable SMS permissions in App Settings.',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Open Settings', onPress: () => void Linking.openSettings() },
+          ],
+        );
+      }
+    }
+
+    return isGranted;
+  } catch (error) {
+    console.warn('[ken] Error requesting SMS permission:', error);
+    await Linking.openSettings();
+    return false;
+  }
 }
 
 export async function hasSmsPermission(): Promise<boolean> {
-  if (!nativeModule) return false;
-  return nativeModule.hasSmsPermission();
+  if (Platform.OS !== 'android') return false;
+  if (nativeModule) {
+    return nativeModule.hasSmsPermission();
+  }
+  try {
+    const [receive, read] = await Promise.all([
+      PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.RECEIVE_SMS),
+      PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.READ_SMS),
+    ]);
+    return receive && read;
+  } catch {
+    return false;
+  }
 }
 
 export async function hasNotificationAccess(): Promise<boolean> {
@@ -127,9 +173,31 @@ export async function hasNotificationAccess(): Promise<boolean> {
   return nativeModule.hasNotificationAccess();
 }
 
+/**
+ * Directly opens Android's Notification Listener Settings screen where
+ * the user can grant special notification access to Ken Finance.
+ */
 export async function openNotificationAccessSettings(): Promise<void> {
-  if (!nativeModule) return;
-  return nativeModule.openNotificationAccessSettings();
+  if (nativeModule) {
+    try {
+      await nativeModule.openNotificationAccessSettings();
+      return;
+    } catch {
+      // Fallback to Linking intent
+    }
+  }
+
+  if (Platform.OS === 'android') {
+    try {
+      await Linking.sendIntent('android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS');
+      return;
+    } catch {
+      await Linking.openSettings();
+      return;
+    }
+  }
+
+  await Linking.openSettings();
 }
 
 export async function drainInbox(): Promise<NativeIngestionEvent[]> {

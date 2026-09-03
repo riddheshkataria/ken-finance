@@ -1,5 +1,5 @@
 /**
- * LLM categorisation — the last tier, and the only one that costs money.
+ * LLM categorisation with Google Gemini — the last tier, and the only one that uses an external AI model.
  *
  * The app resolves categories in three tiers: user memory, then a shipped
  * merchant dictionary, then this. By the time a transaction reaches here, both
@@ -11,9 +11,8 @@
  * voice note. "Chai with the team" is unambiguous to a model and invisible to
  * a regex.
  */
-const Anthropic = require('@anthropic-ai/sdk');
+const { GoogleGenAI, Type } = require('@google/genai');
 const { z } = require('zod');
-const { zodOutputFormat } = require('@anthropic-ai/sdk/helpers/zod');
 
 /**
  * The 8 categories, closed. Must stay identical to TransactionCategory in
@@ -37,16 +36,11 @@ const ResultSchema = z.object({
     z.object({
       id: z.string(),
       category: z.enum(CATEGORIES),
-      // Surfaced so the client can decide whether to apply silently or ask.
       confidence: z.enum(['high', 'medium', 'low']),
     }),
   ),
 });
 
-/**
- * Kept byte-stable so it caches. Anything volatile — the transactions
- * themselves — goes in the user message, after the cache breakpoint.
- */
 const SYSTEM_PROMPT = `You categorise Indian personal-finance transactions.
 
 Assign each transaction exactly one category from this list:
@@ -71,20 +65,19 @@ Confidence:
 Use "Others" with low confidence rather than forcing a poor fit. A wrong
 category the user must hunt down and undo is worse than an honest "Others".`;
 
-let client = null;
+let ai = null;
 
-/** True when an API credential is configured. */
+/** True when a Gemini API key is configured. */
 function isConfigured() {
-  return Boolean(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
+  return Boolean(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY);
 }
 
 function getClient() {
-  if (!client) {
-    // Zero-arg constructor: the SDK resolves the API key, auth token, or an
-    // `ant auth login` profile on its own.
-    client = new Anthropic();
+  if (!ai) {
+    const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+    ai = new GoogleGenAI({ apiKey });
   }
-  return client;
+  return ai;
 }
 
 /**
@@ -105,10 +98,10 @@ function toPromptPayload(items) {
 }
 
 /**
- * Categorises a batch of transactions.
+ * Categorises a batch of transactions using Google Gemini with structured JSON output.
  *
  * Batched by design: one request for twenty transactions costs far less than
- * twenty requests, and the cached system prompt is only paid for once.
+ * twenty requests.
  *
  * Returns [] rather than throwing when unconfigured or on failure —
  * categorisation is an enhancement, and losing it must never block a payment
@@ -120,40 +113,53 @@ async function categorizeTransactions(items) {
   }
 
   try {
-    const response = await getClient().messages.parse({
-      model: 'claude-opus-5',
-      max_tokens: 4096,
-      // The taxonomy is identical on every call, so caching it turns most of
-      // the input cost into a cache read.
-      system: [
-        {
-          type: 'text',
-          text: SYSTEM_PROMPT,
-          cache_control: { type: 'ephemeral' },
+    const client = getClient();
+    const promptPayload = toPromptPayload(items);
+
+    const response = await client.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: `Categorise these transactions:\n\n${JSON.stringify(promptPayload, null, 2)}`,
+      config: {
+        systemInstruction: SYSTEM_PROMPT,
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            results: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  id: { type: Type.STRING },
+                  category: {
+                    type: Type.STRING,
+                    enum: CATEGORIES,
+                  },
+                  confidence: {
+                    type: Type.STRING,
+                    enum: ['high', 'medium', 'low'],
+                  },
+                },
+                required: ['id', 'category', 'confidence'],
+              },
+            },
+          },
+          required: ['results'],
         },
-      ],
-      // Classification does not need deliberation, and low effort is
-      // materially cheaper and faster on short inputs.
-      output_config: {
-        format: zodOutputFormat(ResultSchema),
-        effort: 'low',
       },
-      messages: [
-        {
-          role: 'user',
-          content: `Categorise these transactions:\n\n${JSON.stringify(
-            toPromptPayload(items),
-            null,
-            2,
-          )}`,
-        },
-      ],
     });
 
-    // parsed_output is null when the response did not satisfy the schema.
-    return response.parsed_output?.results ?? [];
+    const parsedJson = JSON.parse(response.text || '{}');
+    const validated = ResultSchema.safeParse(parsedJson);
+
+    if (!validated.success) {
+      console.warn('[ken] Gemini output schema validation warning:', validated.error);
+      return [];
+    }
+
+    return validated.data.results;
   } catch (error) {
-    console.warn('[ken] Categorisation failed:', error.message);
+    console.warn('[ken] Gemini categorisation failed:', error.message);
     return [];
   }
 }

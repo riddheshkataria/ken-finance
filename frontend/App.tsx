@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import {
   StyleSheet,
   Text,
@@ -13,20 +13,15 @@ import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
 import { useTransactionStore } from './src/store/useTransactionStore';
-import { useMerchantStore } from './src/store/useMerchantStore';
 import { FloatingMic } from './src/components/FloatingMic';
 import { IngestionSetupCard } from './src/components/IngestionSetupCard';
 import { PendingQueueBanner } from './src/components/PendingQueueBanner';
-import { CategoryPicker } from './src/components/CategoryPicker';
-import { InsightsPanel } from './src/components/InsightsPanel';
-import { useBudgetStore } from './src/store/useBudgetStore';
 import { Transaction, TransactionCategory } from './src/types/transaction';
 
 import { parseVoiceToTransaction } from './src/utils/voiceParser';
 import { useIngestion } from './src/hooks/useIngestion';
 import { selectPendingQueue } from './src/store/queue';
 import { formatINR, sumPaise } from './src/utils/money';
-import { isSyncConfigured } from './src/sync/supabaseClient';
 
 const getCategoryColor = (category: TransactionCategory) => {
   switch (category) {
@@ -52,20 +47,17 @@ const getCategoryColor = (category: TransactionCategory) => {
 
 export default function App() {
   const {
-    transactions: allTransactions,
+    transactions,
     addTransaction,
     deleteTransaction,
+    skipInQueue,
+    ignoreTransaction,
+    attachNote,
     hydrated,
     hydrate,
     loadSampleData,
     clearAll,
   } = useTransactionStore();
-  // Soft-deleted rows stay in the store as tombstones so the delete can be
-  // synced; the UI must never see them.
-  const transactions = useMemo(
-    () => allTransactions.filter((t) => t.deletedAt === null),
-    [allTransactions],
-  );
   const [lastVoicePrompt, setLastVoicePrompt] = useState<string | null>(null);
   // The queue item the user is currently answering, if any. A voice note
   // recorded while this is set attaches to that payment rather than creating
@@ -74,47 +66,22 @@ export default function App() {
     null,
   );
 
-  const hydrateMerchants = useMerchantStore((state) => state.hydrate);
-  const hydrateBudgets = useBudgetStore((state) => state.hydrate);
-  const budgets = useBudgetStore((state) => state.budgets);
-  const setBudget = useBudgetStore((state) => state.setBudget);
-  const [showInsights, setShowInsights] = useState(false);
-
-  // Load persisted state before anything else renders meaningfully. Merchant
-  // memory must be loaded before ingestion runs, or the first captured
-  // payment would be categorised as if the user had taught us nothing.
+  // Load persisted transactions before anything else renders meaningfully.
+  // Runs once; hydrate() is idempotent.
   useEffect(() => {
     void hydrate();
-    void hydrateMerchants();
-    void hydrateBudgets();
-  }, [hydrate, hydrateMerchants, hydrateBudgets]);
-
+  }, [hydrate]);
 
   // Both ingestion channels run concurrently and write straight into the
   // store; dedupe in ingestion/dedupe.ts keeps one payment as one row.
   const { available, permissions, requestSms, openNotificationSettings } =
     useIngestion();
-  const skipInQueue = useTransactionStore((state) => state.skipInQueue);
-  const ignoreTransaction = useTransactionStore((state) => state.ignoreTransaction);
-  const attachNote = useTransactionStore((state) => state.attachNote);
-  const categorizePending = useTransactionStore((state) => state.categorizePending);
-  const updateTransaction = useTransactionStore((state) => state.updateTransaction);
-  const sync = useTransactionStore((state) => state.sync);
-  const syncing = useTransactionStore((state) => state.syncing);
-  const pendingPush = useTransactionStore((state) => state.pendingPush());
-  const syncConfigured = isSyncConfigured();
 
-  // Pull anything another device recorded, once local state is loaded. Sync
-  // is a no-op when Supabase is not configured, so this is safe unconditionally.
-  useEffect(() => {
-    if (hydrated) void sync();
-  }, [hydrated, sync]);
-
-  // The transaction whose category the user is changing. Setting one teaches
-  // merchant memory, so every later payment to that merchant is automatic.
-  const [categorising, setCategorising] = useState<Transaction | null>(null);
-  const pendingQueue = useTransactionStore((state) =>
-    selectPendingQueue(state.transactions),
+  // Memoize the derived pending queue selector based on transactions array
+  // to avoid creating a new array reference on every store snapshot check
+  const pendingQueue = useMemo(
+    () => selectPendingQueue(transactions),
+    [transactions],
   );
 
   // Calculate totals
@@ -141,12 +108,6 @@ export default function App() {
         audioPath: null,
       });
       setNotingTransaction(null);
-
-      // A note is exactly what lets the model beat the keyword guess, so this
-      // is the moment the paid tier is most likely to earn its cost. Not
-      // awaited: the confirmation should not wait on a network round trip.
-      void categorizePending();
-
       Alert.alert(
         'Note added',
         `${formatINR(notingTransaction.amountMinor)} · ${notingTransaction.paidTo}\n\n"${transcription}"`,
@@ -181,7 +142,6 @@ export default function App() {
       audioPath: null,
       updatedAt: new Date().toISOString(),
       deletedAt: null,
-      // Never synced: this row is dirty and will be pushed on the next sync.
       syncedAt: null,
     };
     addTransaction(newTx);
@@ -206,17 +166,11 @@ export default function App() {
         <View style={styles.cardRow}>
           {/* Category Dot & Title */}
           <View style={styles.leftInfo}>
-            <TouchableOpacity
-              style={[styles.categoryBadge, { backgroundColor: `${categoryColor}20` }]}
-              onPress={() => setCategorising(item)}
-              accessibilityRole="button"
-              accessibilityLabel={`Change category, currently ${item.category}`}
-            >
+            <View style={[styles.categoryBadge, { backgroundColor: `${categoryColor}20` }]}>
               <Text style={[styles.categoryBadgeText, { color: categoryColor }]}>
                 {item.category}
               </Text>
-              <Ionicons name="chevron-down" size={11} color={categoryColor} />
-            </TouchableOpacity>
+            </View>
             <Text style={styles.txTitle} numberOfLines={1}>
               {item.title}
             </Text>
@@ -260,46 +214,6 @@ export default function App() {
               <Text style={styles.appName}>Ken Finance</Text>
               <Text style={styles.appSubtitle}>Smart Voice & SMS Finance Manager</Text>
             </View>
-            <View style={styles.headerActions}>
-            {/* Sync state must be visible: silently failing to back up a
-                user's financial history is the worst way to fail. */}
-            {syncConfigured && (
-              <TouchableOpacity
-                style={styles.syncChip}
-                onPress={() => void sync()}
-                disabled={syncing}
-                accessibilityLabel={
-                  syncing
-                    ? 'Syncing'
-                    : pendingPush > 0
-                      ? `${pendingPush} changes waiting to sync`
-                      : 'Synced'
-                }
-              >
-                <Ionicons
-                  name={
-                    syncing
-                      ? 'sync'
-                      : pendingPush > 0
-                        ? 'cloud-upload-outline'
-                        : 'cloud-done-outline'
-                  }
-                  size={14}
-                  color={pendingPush > 0 ? '#B45309' : '#059669'}
-                />
-                {pendingPush > 0 && !syncing && (
-                  <Text style={styles.syncChipText}>{pendingPush}</Text>
-                )}
-              </TouchableOpacity>
-            )}
-            <TouchableOpacity
-              style={styles.insightsButton}
-              onPress={() => setShowInsights(true)}
-              accessibilityLabel="Open budgets and insights"
-            >
-              <Ionicons name="stats-chart" size={16} color="#FFFFFF" />
-              <Text style={styles.insightsButtonText}>Insights</Text>
-            </TouchableOpacity>
             <TouchableOpacity
               style={styles.resetButton}
               onPress={() => {
@@ -317,8 +231,8 @@ export default function App() {
               }}
             >
               <Ionicons name="refresh" size={16} color="#4B5563" />
+              <Text style={styles.resetButtonText}>Reset Data</Text>
             </TouchableOpacity>
-            </View>
           </View>
 
           {/* Overview Balance Cards */}
@@ -415,26 +329,6 @@ export default function App() {
 
           {/* Floating Mic with Live Streaming & Press-and-Hold */}
           <FloatingMic onTranscriptionComplete={handleVoiceComplete} />
-
-          <InsightsPanel
-            visible={showInsights}
-            transactions={transactions}
-            budgets={budgets}
-            onSetBudget={setBudget}
-            onClose={() => setShowInsights(false)}
-          />
-
-          <CategoryPicker
-            transaction={categorising}
-            onDismiss={() => setCategorising(null)}
-            onSelect={(category) => {
-              if (!categorising) return;
-              // updateTransaction teaches merchant memory when a category is
-              // set explicitly — see useTransactionStore.
-              updateTransaction(categorising.id, { category });
-              setCategorising(null);
-            }}
-          />
         </View>
       </SafeAreaView>
     </SafeAreaProvider>
@@ -468,39 +362,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#64748B',
     marginTop: 2,
-  },
-  syncChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 7,
-    borderRadius: 8,
-    backgroundColor: '#F1F5F9',
-  },
-  syncChipText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#B45309',
-  },
-  headerActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  insightsButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    backgroundColor: '#0F172A',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 8,
-  },
-  insightsButtonText: {
-    color: '#FFFFFF',
-    fontSize: 12,
-    fontWeight: '700',
   },
   resetButton: {
     flexDirection: 'row',
@@ -633,9 +494,6 @@ const styles = StyleSheet.create({
   },
   categoryBadge: {
     alignSelf: 'flex-start',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 6,

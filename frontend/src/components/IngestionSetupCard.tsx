@@ -52,7 +52,13 @@ export const IngestionSetupCard: React.FC<IngestionSetupCardProps> = ({
       </Text>
 
       {!notificationsGranted && (
-        <TouchableOpacity style={styles.row} onPress={onOpenNotificationSettings}>
+        <TouchableOpacity
+          style={styles.row}
+          onPress={onOpenNotificationSettings}
+          activeOpacity={0.6}
+          accessibilityRole="button"
+          accessibilityLabel="Grant notification access"
+        >
           <View style={styles.rowIcon}>
             <Ionicons name="notifications-outline" size={18} color="#2563EB" />
           </View>
@@ -68,7 +74,13 @@ export const IngestionSetupCard: React.FC<IngestionSetupCardProps> = ({
       )}
 
       {!smsGranted && (
-        <TouchableOpacity style={styles.row} onPress={onRequestSms}>
+        <TouchableOpacity
+          style={styles.row}
+          onPress={onRequestSms}
+          activeOpacity={0.6}
+          accessibilityRole="button"
+          accessibilityLabel="Grant SMS access"
+        >
           <View style={styles.rowIcon}>
             <Ionicons name="chatbox-outline" size={18} color="#2563EB" />
           </View>

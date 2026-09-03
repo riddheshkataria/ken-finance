@@ -9,7 +9,7 @@ const CATEGORY_KEYWORDS: Record<TransactionCategory, string[]> = {
     'starbucks', 'cafe', 'coffee', 'tea', 'dinner', 'lunch', 'breakfast', 'brunch',
     'food', 'swiggy', 'zomato', 'restaurant', 'bar', 'pub', 'burger', 'pizza',
     'mcdonalds', 'kfc', 'dominos', 'meal', 'eating', 'snacks', 'cold brew', 'drinks',
-    'diner', 'bakery', 'subway'
+    'diner', 'bakery', 'subway', 'chai'
   ],
   Grocery: [
     'grocery', 'groceries', 'veggies', 'vegetables', 'fruits', 'milk', 'instamart',
@@ -30,7 +30,7 @@ const CATEGORY_KEYWORDS: Record<TransactionCategory, string[]> = {
     'jio', 'airtel', 'vi', 'utility', 'postpaid'
   ],
   'P2P Transfer': [
-    'split', 'sent to', 'transferred', 'p2p', 'borrowed', 'lent', 'repaid', 'owe'
+    'split', 'sent to', 'transferred', 'p2p', 'borrowed', 'lent', 'repaid', 'owe', 'owed'
   ],
   Investment: [
     'sip', 'mutual fund', 'stocks', 'shares', 'zerodha', 'groww', 'angelone',
@@ -42,9 +42,31 @@ const CATEGORY_KEYWORDS: Record<TransactionCategory, string[]> = {
   ],
 };
 
-const CREDIT_KEYWORDS = [
-  'received', 'credited', 'got', 'refund', 'refunded', 'cashback', 'salary',
-  'dividend', 'incoming', 'deposit', 'deposited'
+const CREDIT_PHRASES = [
+  'sent me',
+  'sent to me',
+  'paid me',
+  'transferred to me',
+  'transferred me',
+  'gave me',
+  'repaid me',
+  'repaid',
+  'returned to me',
+  'returned me',
+  'owed me',
+  'owes me',
+  'received',
+  'credited',
+  'got',
+  'refund',
+  'refunded',
+  'cashback',
+  'salary',
+  'dividend',
+  'incoming',
+  'deposit',
+  'deposited',
+  'got back',
 ];
 
 /**
@@ -68,8 +90,6 @@ function toTitleCase(str: string): string {
 /**
  * Extracts the spoken amount as integer paise (rules.md §1).
  * Handles "k"/thousand, commas, currency symbols and decimals.
- * People speak rupees ("650", "1.5k"), so conversion happens here — this is
- * the boundary where a human-supplied rupee figure enters the system.
  */
 function extractAmountMinor(transcript: string): number {
   // Check for expressions like "3k", "1.5k", "3 thousand"
@@ -100,7 +120,6 @@ function extractCategory(transcript: string): TransactionCategory {
   // Match against known category keyword lists
   for (const [category, keywords] of Object.entries(CATEGORY_KEYWORDS) as [TransactionCategory, string[]][]) {
     for (const kw of keywords) {
-      // Word boundary match
       const regex = new RegExp(`\\b${kw}\\b`, 'i');
       if (regex.test(lower)) {
         return category;
@@ -108,9 +127,10 @@ function extractCategory(transcript: string): TransactionCategory {
     }
   }
 
-  // If sentence is "Paid X to [Person]" or "Received X from [Person]" without other category, classify as P2P Transfer
+  // If sentence mentions paying/receiving person without specific category, classify as P2P Transfer
   if (/\b(?:paid|sent|transferred|give|gave)\s+\d+.*?\bto\s+[A-Z][a-z]+/i.test(transcript) ||
-      /\b(?:received|got)\s+\d+.*?\bfrom\s+[A-Z][a-z]+/i.test(transcript)) {
+      /\b(?:received|got)\s+\d+.*?\bfrom\s+[A-Z][a-z]+/i.test(transcript) ||
+      /\b(?:sent|paid|transferred|gave)\s+(?:me|to\s+me)\b/i.test(transcript)) {
     return 'P2P Transfer';
   }
 
@@ -121,17 +141,26 @@ function extractCategory(transcript: string): TransactionCategory {
  * Extracts merchant, person name, or entity from context
  */
 function extractPaidTo(transcript: string): string {
-  // Pattern 1: "at/to/from/via/in [Merchant/Person] for/towards/on ..."
-  const atToMatch = transcript.match(/\b(?:at|to|from|on|via)\s+([A-Za-z0-9&'\s]+?)(?=\s+(?:for|towards|via|by|worth|using|through|on\s+account|with)|$)/i);
-  if (atToMatch && atToMatch[1]) {
-    const candidate = cleanText(atToMatch[1]).trim();
-    // Exclude noise words
-    if (candidate && !['the', 'my', 'a', 'an', 'cash', 'account', 'upi'].includes(candidate.toLowerCase())) {
+  // Pattern 1: "[Person] sent/paid/transferred/gave me [Amount]" (e.g. "Tanmay sent me 230")
+  const subjectPersonMatch = transcript.match(/^([A-Za-z0-9&']+)\s+(?:sent|paid|transferred|gave|repaid|returned)\b/i);
+  if (subjectPersonMatch && subjectPersonMatch[1]) {
+    const candidate = cleanText(subjectPersonMatch[1]).trim();
+    if (candidate && !['i', 'he', 'she', 'they', 'we', 'someone', 'the'].includes(candidate.toLowerCase())) {
       return toTitleCase(candidate);
     }
   }
 
-  // Pattern 2: Known merchant keywords
+  // Pattern 2: "at/to/from/via/in [Merchant/Person] for/towards/on ..."
+  const atToMatch = transcript.match(/\b(?:at|to|from|on|via)\s+([A-Za-z0-9&'\s]+?)(?=\s+(?:for|towards|via|by|worth|using|through|on\s+account|with|he\s+owed|she\s+owed|they\s+owed)|$)/i);
+  if (atToMatch && atToMatch[1]) {
+    const candidate = cleanText(atToMatch[1]).trim();
+    // Exclude noise words
+    if (candidate && !['the', 'my', 'a', 'an', 'cash', 'account', 'upi', 'me'].includes(candidate.toLowerCase())) {
+      return toTitleCase(candidate);
+    }
+  }
+
+  // Pattern 3: Known merchant keywords
   const merchants = [
     'Starbucks', 'Swiggy', 'Zomato', 'Uber', 'Ola', 'Blinkit', 'Zepto', 'Instamart',
     'Amazon', 'Flipkart', 'Netflix', 'Spotify', 'Tata Power', 'Airtel', 'Jio',
@@ -155,12 +184,12 @@ function extractTitle(transcript: string, paidTo: string, category: TransactionC
   const forMatch = transcript.match(/\b(?:for|towards|on)\s+([A-Za-z0-9&'\s]+?)(?=\s+(?:at|to|from|via|using|through|worth)|$)/i);
   if (forMatch && forMatch[1]) {
     const purpose = cleanText(forMatch[1]).trim();
-    if (purpose && !['it', 'this', 'that'].includes(purpose.toLowerCase())) {
+    if (purpose && !['it', 'this', 'that', 'me'].includes(purpose.toLowerCase())) {
       return toTitleCase(purpose);
     }
   }
 
-  // If paidTo is available, format as "[PaidTo] - [Category]"
+  // If paidTo is available, format as "[PaidTo] ([Category])"
   if (paidTo && paidTo !== 'Unknown Merchant') {
     return `${paidTo} (${category})`;
   }
@@ -175,11 +204,20 @@ function extractTitle(transcript: string, paidTo: string, category: TransactionC
  */
 function extractTransactionType(transcript: string): TransactionType {
   const lower = transcript.toLowerCase();
-  for (const word of CREDIT_KEYWORDS) {
-    if (new RegExp(`\\b${word}\\b`, 'i').test(lower)) {
+
+  // Explicit debit indicators (spending, paying someone else)
+  if (/\b(?:paid|sent|transferred|gave)\s+(?:rs\.?|₹|\$)?\s*\d+.*?\bto\s+[a-z]/i.test(lower) ||
+      /\b(?:spent|paid for|bought|ordered|recharged|debited)\b/i.test(lower)) {
+    return 'Debit';
+  }
+
+  // Credit phrases (incoming funds, repayments to user, refunds)
+  for (const phrase of CREDIT_PHRASES) {
+    if (new RegExp(`\\b${phrase}\\b`, 'i').test(lower)) {
       return 'Credit';
     }
   }
+
   return 'Debit';
 }
 

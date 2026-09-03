@@ -64,7 +64,7 @@ app.listen(PORT, () => {
   console.log(`🚀 Ken Finance Backend server running at http://localhost:${PORT}`);
   if (!isConfigured()) {
     console.log(
-      '   Categorisation disabled: set ANTHROPIC_API_KEY to enable the LLM tier.',
+      '   Categorisation disabled: set GEMINI_API_KEY to enable the LLM tier.',
     );
   }
 });

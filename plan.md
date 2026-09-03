@@ -57,7 +57,7 @@ Bank / UPI notification
                                                           ▼
                                           Express API ──► Supabase Postgres
                                                 │
-                                                └─► Claude (categorization)
+                                                └─► Google Gemini (categorization)
 ```
 
 **The hot path is entirely native Kotlin.** This is the single most important performance decision in the plan. Booting the React Native bridge to open a microphone takes 1–2 seconds; a user standing at a counter will abandon. Kotlin writes to a staging buffer, and JS drains it later when the app is opened.
@@ -203,11 +203,9 @@ Three tiers, cheapest first:
 
 1. **Merchant memory** — user categorizes `Swiggy` once, every future Swiggy is automatic. Free, instant, and after a few weeks covers ~80% of transactions. This alone solves most of the tedium complaint.
 2. **Shipped merchant dictionary** — a few hundred common Indian merchants pre-mapped, so the app isn't useless on day one.
-3. **Claude** — only for genuinely new merchants, using the voice transcript as the signal. "Chai with the team" → `Food & Drink`, note preserved, `reimbursable` tag inferred.
+3. **Google Gemini** — only for genuinely new merchants, using the voice transcript as the signal. "Chai with the team" → `Food & Drink`, note preserved, `reimbursable` tag inferred.
 
-Use `claude-opus-5` via `@anthropic-ai/sdk` in the Express layer, with structured outputs (`output_config: { format: ... }`) so the response is schema-valid. Prompt-cache the category taxonomy and few-shot examples — they're identical on every call, so cache reads cut input cost ~10x. Route non-urgent backfill through the **Batch API at 50% cost**.
-
-Rough economics: ~₹0.40/transaction uncached at Opus pricing, but tier 1 absorbs ~80% of volume and caching cuts most of the rest — landing near **₹10–20/user/month** at ~200 transactions. If that's still too high, `claude-haiku-4-5` ($1/$5 per 1M vs $5/$25) is roughly 5x cheaper and adequate for short-text classification; that's a cost/quality call worth making with real data rather than upfront.
+Use `gemini-2.5-flash` via `@google/genai` in the Express layer, with structured JSON schema outputs so the response is schema-valid.
 
 ---
 
@@ -231,7 +229,7 @@ The payoff that makes the captured notes worth having:
 | 1 | **Native ingestion** — Kotlin notification listener → Room → JS bridge | Raw payments land in the DB |
 | 2 | **Parser + list UI** — rule pack, dedupe, transaction list, manual categorize | **App is genuinely useful here** |
 | 3 | **Widget + voice capture** — `AppWidgetProvider`, `VoiceCaptureActivity`, pending-note queue with chained capture, notification action | The differentiator ships |
-| 4 | **Smart categorization** — merchant memory → dictionary → Claude | Tedium actually disappears |
+| 4 | **Smart categorization** — merchant memory → dictionary → Google Gemini | Tedium actually disappears |
 | 5 | **Budgets + analytics** | The reason to keep using it |
 
 Phase 2 is the honest MVP line — everything after it is leverage on a product that already works.
