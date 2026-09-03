@@ -1,7 +1,7 @@
-// expo-module-gradle-plugin supplies the Android library setup, Kotlin
-// configuration and expo-modules-core wiring that every Expo module needs.
-// Hand-rolling those drifts from whatever the installed SDK expects.
-apply plugin: 'expo-module-gradle-plugin'
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
 
 group = 'expo.modules.keningestion'
 version = '0.1.0'
@@ -10,6 +10,8 @@ android {
   namespace 'expo.modules.keningestion'
 
   defaultConfig {
+    versionCode 1
+    versionName '0.1.0'
     minSdkVersion 24
   }
 }

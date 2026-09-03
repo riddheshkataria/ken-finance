@@ -29,6 +29,12 @@ export const NOTIFICATION_PACKAGE_ALLOWLIST: readonly string[] = [
   'net.one97.paytm',
   'in.amazon.mShop.android.shopping',       // Amazon Pay
   'com.dreamplug.androidapp',               // CRED
+  'org.npci.upi.ppbl',                      // BHIM UPI
+  'com.navi.finance',                       // Navi
+  'money.fi.app',                           // Fi Money
+  'money.jupiter',                          // Jupiter
+  'indwin.c3.shareapp',                     // Slice
+  'com.supermoney.app',                     // Super.money
   'com.google.android.apps.messaging',      // Google Messages (carries bank SMS)
   'com.samsung.android.messaging',
   'com.android.mms',

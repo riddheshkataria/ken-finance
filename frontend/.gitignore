@@ -41,3 +41,7 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+modules/**/build/
+modules/**/.gradle/
+.gradle/
+build/
