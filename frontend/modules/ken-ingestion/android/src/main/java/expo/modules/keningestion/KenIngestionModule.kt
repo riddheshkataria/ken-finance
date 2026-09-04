@@ -55,11 +55,22 @@ class KenIngestionModule : Module() {
          * permission — there is no dialog to show, only a settings screen.
          */
         AsyncFunction("hasNotificationAccess") {
-            val enabled = Settings.Secure.getString(
-                context.contentResolver,
-                "enabled_notification_listeners"
-            )
-            enabled?.contains(context.packageName) == true
+            val isEnabledByCompat = try {
+                androidx.core.app.NotificationManagerCompat.getEnabledListenerPackages(context)
+                    .contains(context.packageName)
+            } catch (_: Exception) {
+                false
+            }
+
+            if (isEnabledByCompat) {
+                true
+            } else {
+                val enabled = Settings.Secure.getString(
+                    context.contentResolver,
+                    "enabled_notification_listeners"
+                )
+                enabled?.contains(context.packageName) == true
+            }
         }
 
         AsyncFunction("openNotificationAccessSettings") {

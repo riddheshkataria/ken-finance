@@ -17,6 +17,7 @@ import {
   PermissionsAndroid,
   Platform,
 } from 'react-native';
+import { requireOptionalNativeModule, EventEmitter } from 'expo-modules-core';
 import type { IngestionEvent } from '../ingestion/types';
 
 /** Shape the Kotlin module emits and stores. */
@@ -81,8 +82,15 @@ export interface WidgetPayload {
   pendingCount: number;
 }
 
-const nativeModule: KenIngestionNativeModule | undefined =
-  NativeModules.KenIngestion;
+const expoKenModule =
+  requireOptionalNativeModule<KenIngestionNativeModule>('KenIngestion');
+const legacyKenModule =
+  NativeModules.KenIngestion as KenIngestionNativeModule | undefined;
+
+const nativeModule: KenIngestionNativeModule | null =
+  expoKenModule ?? legacyKenModule ?? null;
+
+const expoEmitter = expoKenModule ? new EventEmitter(expoKenModule as any) : null;
 
 export const isNativeIngestionAvailable = (): boolean =>
   Platform.OS === 'android';
@@ -97,10 +105,14 @@ export function addIngestionListener(
     return { remove: () => undefined };
   }
 
-  const emitter = new NativeEventEmitter(
-    NativeModules.KenIngestion as unknown as never,
+  if (expoEmitter) {
+    return (expoEmitter as any).addListener(INGESTION_EVENT, handler);
+  }
+
+  const legacyEmitter = new NativeEventEmitter(
+    nativeModule as unknown as never,
   );
-  return emitter.addListener(INGESTION_EVENT, handler);
+  return legacyEmitter.addListener(INGESTION_EVENT, handler);
 }
 
 /**
