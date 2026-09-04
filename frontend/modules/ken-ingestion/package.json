@@ -1,0 +1,15 @@
+{
+  "name": "ken-ingestion",
+  "version": "0.1.0",
+  "main": "index.ts",
+  "types": "index.d.ts",
+  "expo": {
+    "autolinking": {
+      "platforms": ["android"]
+    }
+  },
+  "peerDependencies": {
+    "expo": "*"
+  }
+}
+

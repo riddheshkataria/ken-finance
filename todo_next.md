@@ -62,8 +62,18 @@ npm test 2>/dev/null || node -e "require('./index')"
   - Offline-first, tombstone deletes, pull-before-push merge.
 - **TASK F: Budgets and analytics** (`src/analytics/`, `store/useBudgetStore.ts`, `components/InsightsPanel.tsx`) ✅ **DONE**:
   - Safe-to-spend-today, overpacing warnings, merchant leaderboard, recurring detection, transcript search.
-- **Voice speech parser** (`src/utils/voiceParser.ts`) ✅ **DONE**:
-  - Converts natural spoken English/Hinglish (e.g. repayments, P2P transfers, dining, rent, groceries) with full test suite.
+- **Voice speech parser & Live Speech-to-Text (STT)** (`modules/ken-ingestion/`, `FloatingMic.tsx`, `kenIngestion.ts`, `voiceParser.ts`) ✅ **DONE**:
+  - Live native speech recognition directly integrated in local Expo module (`KenIngestionModule.kt`) using Android's `SpeechRecognizer`.
+  - State machine lifecycle (`IDLE → STARTING → LISTENING → FINISHING → DESTROYING`):
+    - `onEndOfSpeech` transitions to `FINISHING` so Android's subsequent `onResults` delivery is never prematurely dropped before emission to JS.
+    - Added delay and auto-retry for transient `ERROR_CLIENT` (5) and `ERROR_RECOGNIZER_BUSY` (8).
+    - Graceful locale fallback on errors 12/13 (unsupported/unavailable language) to system default locale.
+    - Suppressed benign transition notices (error 11 `SERVER_DISCONNECTED` and error 7 `NO_MATCH`).
+  - Text-only transcription capture: no `.m4a` audio files written to disk; zero audio storage overhead.
+  - Safe lazy `getEventEmitter()` resolver in `kenIngestion.ts` without top-level `EventEmitter` static import to prevent uninitialized `globalThis.expo` runtime crashes in Hermes.
+  - Safe permission checking in `FloatingMic.tsx`: checks `PermissionsAndroid.check()` first to avoid `E_INVALID_ACTIVITY` crashes when activity isn't attached.
+  - Package visibility queries in `AndroidManifest.xml` for `RecognitionService`, `googlequicksearchbox`, `tts`, and `as`.
+  - Converts natural spoken English/Hinglish (e.g. repayments, P2P transfers, dining, rent, groceries) with full 6/6 test suite.
 - **Navigation & Screen Sections** (`App.tsx`, `TransactionDetailModal.tsx`) ✅ **DONE**:
   - 4 tabs (⚡ Activity, 🧾 Transactions Ledger, 📊 Budgets/Insights, ⚙️ Sync & Settings) with search, category filtering, inline edit, and raw bank SMS audit payload viewer.
 - **139 tests** across all unit test suites with **0 failures**.

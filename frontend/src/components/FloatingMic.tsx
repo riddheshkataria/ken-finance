@@ -10,15 +10,14 @@ import {
   Alert,
   StyleProp,
   ViewStyle,
-  NativeModules,
-  TextInput,
-  Modal,
 } from 'react-native';
-import Voice, {
-  SpeechResultsEvent,
-  SpeechErrorEvent,
-} from '@react-native-voice/voice';
 import { Ionicons } from '@expo/vector-icons';
+import {
+  isNativeIngestionAvailable,
+  startNativeSpeech,
+  stopNativeSpeech,
+  addSpeechListeners,
+} from '../native/kenIngestion';
 
 export interface FloatingMicProps {
   onTranscriptionComplete: (text: string) => void;
@@ -30,18 +29,13 @@ export interface FloatingMicProps {
 export const FloatingMic: React.FC<FloatingMicProps> = ({
   onTranscriptionComplete,
   onLiveTranscriptionChange,
-  locale = 'en-US',
+  locale,
   style,
 }) => {
   const [isRecording, setIsRecording] = useState(false);
   const [liveTranscription, setLiveTranscription] = useState('');
-  const [showExpoGoModal, setShowExpoGoModal] = useState(false);
-  const [manualVoiceInput, setManualVoiceInput] = useState('');
 
-  // Check if native Voice module is linked in binary
-  const isNativeVoiceAvailable = Boolean(NativeModules && NativeModules.Voice);
-
-  // Web Speech API recognition instance ref
+  // Web Speech API recognition instance ref (for browser testing)
   const webRecognitionRef = useRef<any>(null);
 
   // Animated values for pulsing visual effects
@@ -53,6 +47,22 @@ export const FloatingMic: React.FC<FloatingMicProps> = ({
 
   // Ref to hold current transcribed text across async callbacks
   const latestTranscriptionRef = useRef('');
+  // Prevents duplicate submissions of the same voice note
+  const hasCompletedRef = useRef(false);
+
+  const submitTranscription = useCallback(
+    (text: string) => {
+      if (hasCompletedRef.current) return;
+      const trimmed = text.trim();
+      if (trimmed) {
+        hasCompletedRef.current = true;
+        onTranscriptionComplete(trimmed);
+        setLiveTranscription('');
+        latestTranscriptionRef.current = '';
+      }
+    },
+    [onTranscriptionComplete],
+  );
 
   // Start continuous pulse animation loop
   const startPulseAnimation = useCallback(() => {
@@ -73,7 +83,7 @@ export const FloatingMic: React.FC<FloatingMicProps> = ({
           duration: 1200,
           useNativeDriver: true,
         }),
-      ])
+      ]),
     );
 
     const pulse2 = Animated.loop(
@@ -91,7 +101,7 @@ export const FloatingMic: React.FC<FloatingMicProps> = ({
             useNativeDriver: true,
           }),
         ]),
-      ])
+      ]),
     );
 
     pulse1.start();
@@ -120,83 +130,123 @@ export const FloatingMic: React.FC<FloatingMicProps> = ({
     }).start();
   }, [pulseAnim1, pulseAnim2, opacityAnim1, opacityAnim2, buttonScaleAnim]);
 
-  // Request runtime microphone permission
+  // Request runtime microphone permission on Android
   const checkAndRequestPermission = async (): Promise<boolean> => {
     if (Platform.OS === 'android') {
       try {
+        const alreadyGranted = await PermissionsAndroid.check(
+          PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+        );
+        if (alreadyGranted) return true;
+
         const granted = await PermissionsAndroid.request(
           PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
           {
             title: 'Microphone Permission',
-            message: 'Ken Finance needs access to your microphone to transcribe transactions.',
-            buttonPositive: 'OK',
-          }
+            message: 'Ken Finance needs access to your microphone to transcribe expense notes.',
+            buttonPositive: 'Allow',
+            buttonNegative: 'Cancel',
+          },
         );
         return granted === PermissionsAndroid.RESULTS.GRANTED;
       } catch (err) {
-        console.warn('Microphone permission request error:', err);
-        return false;
+        console.warn('Microphone permission check error:', err);
+        try {
+          return await PermissionsAndroid.check(
+            PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+          );
+        } catch (_) {
+          return false;
+        }
       }
     }
     return true;
   };
 
-  // Setup Voice event listeners for Native and Web
+  // Setup native and web speech event listeners
   useEffect(() => {
-    if (isNativeVoiceAvailable) {
-      Voice.onSpeechStart = () => setIsRecording(true);
-      Voice.onSpeechEnd = () => setIsRecording(false);
-      Voice.onSpeechError = (e: SpeechErrorEvent) => {
-        console.warn('Voice recognition error:', e.error);
+    const subscription = addSpeechListeners({
+      onSpeechStart: () => {
+        setIsRecording(true);
+      },
+      onSpeechEnd: () => {
         setIsRecording(false);
         stopPulseAnimation();
-      };
-
-      Voice.onSpeechPartialResults = (e: SpeechResultsEvent) => {
-        if (e.value && e.value.length > 0) {
-          const partialText = e.value[0];
-          latestTranscriptionRef.current = partialText;
-          setLiveTranscription(partialText);
-          if (onLiveTranscriptionChange) onLiveTranscriptionChange(partialText);
+        // If results haven't fired within 500ms after speech ends, submit what we have
+        setTimeout(() => {
+          if (!hasCompletedRef.current && latestTranscriptionRef.current.trim()) {
+            submitTranscription(latestTranscriptionRef.current);
+          }
+        }, 500);
+      },
+      onSpeechError: (error) => {
+        // The native module auto-retries transient errors (5=CLIENT, 8=BUSY,
+        // 11=SERVER_DISCONNECTED). Errors only reach here if retries are
+        // exhausted, or for non-transient errors. Suppress noise.
+        const isBenign =
+          error.includes('No speech') ||
+          error.includes('timeout') ||
+          error.includes('Server disconnected') ||
+          error.includes('Client error') ||
+          error.includes('Recognizer busy') ||
+          error.includes('Recognition error code:');
+        if (!isBenign) {
+          console.warn('Speech recognition notice:', error);
         }
-      };
-
-      Voice.onSpeechResults = (e: SpeechResultsEvent) => {
-        if (e.value && e.value.length > 0) {
-          const resultText = e.value[0];
+        setIsRecording(false);
+        stopPulseAnimation();
+        // If words were captured before the error, submit them
+        if (!hasCompletedRef.current && latestTranscriptionRef.current.trim()) {
+          submitTranscription(latestTranscriptionRef.current);
+        }
+      },
+      onSpeechPartialResults: (text) => {
+        if (text) {
+          latestTranscriptionRef.current = text;
+          setLiveTranscription(text);
+          if (onLiveTranscriptionChange) onLiveTranscriptionChange(text);
+        }
+      },
+      onSpeechResults: (text) => {
+        const resultText = text || latestTranscriptionRef.current;
+        if (resultText) {
           latestTranscriptionRef.current = resultText;
           setLiveTranscription(resultText);
+          if (onLiveTranscriptionChange) onLiveTranscriptionChange(resultText);
+          setIsRecording(false);
+          stopPulseAnimation();
+          submitTranscription(resultText);
         }
-      };
-    }
+      },
+    });
 
     return () => {
-      if (isNativeVoiceAvailable) {
-        try {
-          Voice.destroy().then(Voice.removeAllListeners);
-        } catch (_) {}
-      }
+      subscription.remove();
       if (webRecognitionRef.current) {
         try {
           webRecognitionRef.current.stop();
         } catch (_) {}
       }
     };
-  }, [isNativeVoiceAvailable, onLiveTranscriptionChange, stopPulseAnimation]);
+  }, [onLiveTranscriptionChange, stopPulseAnimation, submitTranscription]);
 
-  // Handle Press In (Start recording & hold)
-  const handlePressIn = async () => {
-    // If running in Web Browser
+  const startRecording = async () => {
+    // If Web platform
     if (Platform.OS === 'web') {
       const SpeechRecognition =
-        (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+        (window as any).SpeechRecognition ||
+        (window as any).webkitSpeechRecognition;
 
       if (SpeechRecognition) {
         try {
           const recognition = new SpeechRecognition();
           recognition.continuous = true;
           recognition.interimResults = true;
-          recognition.lang = locale;
+          recognition.lang =
+            locale ||
+            (typeof navigator !== 'undefined'
+              ? navigator.language || 'en-US'
+              : 'en-US');
 
           recognition.onresult = (event: any) => {
             let interim = '';
@@ -214,7 +264,18 @@ export const FloatingMic: React.FC<FloatingMicProps> = ({
             stopPulseAnimation();
           };
 
+          recognition.onend = () => {
+            setIsRecording(false);
+            stopPulseAnimation();
+            if (!hasCompletedRef.current && latestTranscriptionRef.current.trim()) {
+              submitTranscription(latestTranscriptionRef.current);
+            }
+          };
+
           webRecognitionRef.current = recognition;
+          hasCompletedRef.current = false;
+          latestTranscriptionRef.current = '';
+          setLiveTranscription('');
           recognition.start();
           setIsRecording(true);
           startPulseAnimation();
@@ -225,39 +286,31 @@ export const FloatingMic: React.FC<FloatingMicProps> = ({
       }
     }
 
-    // If native module is not linked (Expo Go sandbox)
-    if (!isNativeVoiceAvailable && Platform.OS !== 'web') {
-      setShowExpoGoModal(true);
-      return;
-    }
-
-    // Native custom build with linked Voice module
+    // Android Native Ingestion SpeechRecognizer
     const permitted = await checkAndRequestPermission();
     if (!permitted) {
       Alert.alert(
         'Permission Denied',
-        'Microphone access is required to use voice input.'
+        'Microphone access is required to speak transactions.',
       );
       return;
     }
 
     try {
+      hasCompletedRef.current = false;
       latestTranscriptionRef.current = '';
       setLiveTranscription('');
       startPulseAnimation();
       setIsRecording(true);
-      await Voice.start(locale);
+      await startNativeSpeech(locale);
     } catch (error) {
-      console.warn('Voice.start error:', error);
+      console.warn('startNativeSpeech error:', error);
       setIsRecording(false);
       stopPulseAnimation();
     }
   };
 
-  // Handle Press Out (Release to finalize & submit)
-  const handlePressOut = async () => {
-    if (!isRecording) return;
-
+  const stopRecording = async () => {
     stopPulseAnimation();
     setIsRecording(false);
 
@@ -265,30 +318,32 @@ export const FloatingMic: React.FC<FloatingMicProps> = ({
       try {
         webRecognitionRef.current.stop();
       } catch (_) {}
-    } else if (isNativeVoiceAvailable) {
+    } else {
       try {
-        await Voice.stop();
+        await stopNativeSpeech();
       } catch (error) {
-        console.warn('Voice.stop error:', error);
+        console.warn('stopNativeSpeech error:', error);
       }
     }
 
+    // Small delay to let final speech recognizer chunk decode and submit
     setTimeout(() => {
       const finalText = latestTranscriptionRef.current.trim();
       if (finalText) {
-        onTranscriptionComplete(finalText);
+        submitTranscription(finalText);
       }
       setLiveTranscription('');
       latestTranscriptionRef.current = '';
-    }, 250);
+    }, 400);
   };
 
-  const handleModalSubmit = (text: string) => {
-    setShowExpoGoModal(false);
-    if (text.trim()) {
-      onTranscriptionComplete(text.trim());
+  // Toggle on press: tap to start / tap to stop
+  const handleToggle = () => {
+    if (isRecording) {
+      void stopRecording();
+    } else {
+      void startRecording();
     }
-    setManualVoiceInput('');
   };
 
   return (
@@ -298,14 +353,14 @@ export const FloatingMic: React.FC<FloatingMicProps> = ({
         <View style={styles.tooltipBubble}>
           <View style={styles.recordingIndicatorRow}>
             <View style={styles.redDot} />
-            <Text style={styles.recordingStatusText}>Listening...</Text>
+            <Text style={styles.recordingStatusText}>Listening (Tap mic to finish)</Text>
           </View>
           <Text
             style={styles.liveText}
             numberOfLines={3}
             ellipsizeMode="tail"
           >
-            {liveTranscription || 'Speak your transaction (e.g. "Spent 650 at Starbucks for cold brew")...'}
+            {liveTranscription || 'Speak now (e.g. "Spent 650 at Starbucks for cold brew")...'}
           </Text>
         </View>
       )}
@@ -333,16 +388,10 @@ export const FloatingMic: React.FC<FloatingMicProps> = ({
         />
 
         <TouchableOpacity
-          activeOpacity={0.9}
-          onPressIn={handlePressIn}
-          onPressOut={handlePressOut}
-          onPress={() => {
-            if (!isNativeVoiceAvailable && Platform.OS !== 'web') {
-              setShowExpoGoModal(true);
-            }
-          }}
+          activeOpacity={0.85}
+          onPress={handleToggle}
           style={styles.touchableArea}
-          accessibilityLabel="Hold to speak transaction"
+          accessibilityLabel={isRecording ? 'Stop recording' : 'Tap to speak transaction'}
           accessibilityRole="button"
         >
           <Animated.View
@@ -353,77 +402,13 @@ export const FloatingMic: React.FC<FloatingMicProps> = ({
             ]}
           >
             <Ionicons
-              name={isRecording ? 'mic' : 'mic-outline'}
-              size={30}
+              name={isRecording ? 'stop' : 'mic'}
+              size={28}
               color="#FFFFFF"
             />
           </Animated.View>
         </TouchableOpacity>
       </View>
-
-      {/* Expo Go Quick Speech Simulation Modal (Active only in Expo Go) */}
-      <Modal
-        visible={showExpoGoModal}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setShowExpoGoModal(false)}
-      >
-        <View style={styles.modalBackdrop}>
-          <View style={styles.modalCard}>
-            <View style={styles.modalHeader}>
-              <Ionicons name="mic-circle" size={32} color="#2563EB" />
-              <Text style={styles.modalTitle}>Voice Transaction Input</Text>
-            </View>
-            <Text style={styles.modalDescription}>
-              In **Expo Go**, custom native speech binaries require a development build (`npx expo run:android` / `run:ios`). You can type or pick a sample voice command to test parsing:
-            </Text>
-
-            <TextInput
-              style={styles.modalInput}
-              placeholder="e.g. Spent 650 at Starbucks for cold brew"
-              placeholderTextColor="#94A3B8"
-              value={manualVoiceInput}
-              onChangeText={setManualVoiceInput}
-            />
-
-            <View style={styles.samplePills}>
-              <TouchableOpacity
-                style={styles.pill}
-                onPress={() => handleModalSubmit('Spent 650 at Starbucks for cold brew')}
-              >
-                <Text style={styles.pillText}>☕ 650 Starbucks</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.pill}
-                onPress={() => handleModalSubmit('Paid 3000 to Amit for flat rent')}
-              >
-                <Text style={styles.pillText}>🏠 3000 Flat Rent</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.pill}
-                onPress={() => handleModalSubmit('Received 500 from Rahul for dinner split')}
-              >
-                <Text style={styles.pillText}>💸 500 Rahul split</Text>
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.modalButtonRow}>
-              <TouchableOpacity
-                style={styles.cancelBtn}
-                onPress={() => setShowExpoGoModal(false)}
-              >
-                <Text style={styles.cancelBtnText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.submitBtn}
-                onPress={() => handleModalSubmit(manualVoiceInput)}
-              >
-                <Text style={styles.submitBtnText}>Parse & Log</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
     </View>
   );
 };
@@ -477,21 +462,21 @@ const styles = StyleSheet.create({
     position: 'absolute',
     bottom: 80,
     right: 0,
-    width: 240,
+    width: 260,
     backgroundColor: '#1E293B',
     paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 12,
+    paddingVertical: 12,
+    borderRadius: 14,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.25,
-    shadowRadius: 5,
-    elevation: 6,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
   },
   recordingIndicatorRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 4,
+    marginBottom: 6,
   },
   redDot: {
     width: 8,
@@ -501,106 +486,15 @@ const styles = StyleSheet.create({
     marginRight: 6,
   },
   recordingStatusText: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '700',
-    color: '#EF4444',
+    color: '#F87171',
     textTransform: 'uppercase',
+    letterSpacing: 0.5,
   },
   liveText: {
     fontSize: 13,
     color: '#F8FAFC',
     lineHeight: 18,
-  },
-  modalBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(15, 23, 42, 0.6)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
-  },
-  modalCard: {
-    width: '100%',
-    maxWidth: 380,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 20,
-    padding: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.15,
-    shadowRadius: 20,
-    elevation: 10,
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 8,
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#0F172A',
-  },
-  modalDescription: {
-    fontSize: 13,
-    color: '#64748B',
-    lineHeight: 18,
-    marginBottom: 14,
-  },
-  modalInput: {
-    backgroundColor: '#F8FAFC',
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    fontSize: 14,
-    color: '#0F172A',
-    marginBottom: 12,
-  },
-  samplePills: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginBottom: 18,
-  },
-  pill: {
-    backgroundColor: '#EFF6FF',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#DBEAFE',
-  },
-  pillText: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#1E40AF',
-  },
-  modalButtonRow: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    gap: 10,
-  },
-  cancelBtn: {
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 10,
-  },
-  cancelBtnText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#64748B',
-  },
-  submitBtn: {
-    backgroundColor: '#2563EB',
-    paddingHorizontal: 18,
-    paddingVertical: 10,
-    borderRadius: 10,
-  },
-  submitBtnText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#FFFFFF',
   },
 });

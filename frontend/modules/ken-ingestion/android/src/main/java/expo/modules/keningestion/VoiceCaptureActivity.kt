@@ -3,20 +3,16 @@ package expo.modules.keningestion
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.media.MediaRecorder
-import android.os.Build
 import android.os.Bundle
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
-import android.util.Log
 import android.view.View
 import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
 import android.app.Activity
 import androidx.core.content.ContextCompat
-import java.io.File
 
 /**
  * The mic. Launched by a PendingIntent from the widget or the notification.
@@ -29,8 +25,6 @@ import java.io.File
 class VoiceCaptureActivity : Activity() {
 
     private var recognizer: SpeechRecognizer? = null
-    private var recorder: MediaRecorder? = null
-    private var audioFile: File? = null
 
     private var transactionId: String? = null
     private var transcript: String = ""
@@ -96,43 +90,7 @@ class VoiceCaptureActivity : Activity() {
         retryButton.visibility = View.GONE
         statusView.setText(R.string.ken_listening)
 
-        // Best effort only. On most devices SpeechRecognizer takes exclusive
-        // hold of the microphone, so a parallel raw recording frequently fails
-        // to start. Recognition is the feature that must work; the audio file
-        // is what enables replay-and-correct, so we try for it and carry on
-        // without it when the device refuses.
-        startRecordingBestEffort()
         startRecognition()
-    }
-
-    private fun startRecordingBestEffort() {
-        runCatching {
-            val target = File(filesDir, "voice_notes").apply { mkdirs() }
-                .resolve("note_${System.currentTimeMillis()}.m4a")
-
-            val newRecorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                MediaRecorder(this)
-            } else {
-                @Suppress("DEPRECATION")
-                MediaRecorder()
-            }
-
-            newRecorder.apply {
-                setAudioSource(MediaRecorder.AudioSource.MIC)
-                setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-                setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-                setOutputFile(target.absolutePath)
-                prepare()
-                start()
-            }
-
-            recorder = newRecorder
-            audioFile = target
-        }.onFailure { error ->
-            // Expected on most devices. Not an error the user should see.
-            Log.i(TAG, "Parallel audio capture unavailable; transcript only", error)
-            releaseRecorder(deleteFile = true)
-        }
     }
 
     private fun startRecognition() {
@@ -141,6 +99,8 @@ class VoiceCaptureActivity : Activity() {
             showEditor()
             return
         }
+
+        releaseRecognizer()
 
         val newRecognizer = SpeechRecognizer.createSpeechRecognizer(this)
         newRecognizer.setRecognitionListener(object : RecognitionListener {
@@ -158,18 +118,6 @@ class VoiceCaptureActivity : Activity() {
             }
 
             override fun onError(error: Int) {
-                // A busy microphone almost always means our own MediaRecorder
-                // won the race. Drop the recording and retry transcript-only
-                // rather than failing the capture.
-                if (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY && recorder != null) {
-                    releaseRecorder(deleteFile = true)
-                    // Destroy this recognizer before starting another, or the
-                    // old one leaks and keeps holding the microphone.
-                    releaseRecognizer()
-                    startRecognition()
-                    return
-                }
-
                 statusView.setText(R.string.ken_didnt_catch)
                 showEditor()
             }
@@ -186,11 +134,9 @@ class VoiceCaptureActivity : Activity() {
                 RecognizerIntent.EXTRA_LANGUAGE_MODEL,
                 RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
             )
-            // en-IN handles Indian-accented English and the Hinglish that
-            // shows up in these notes far better than the en-US default.
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-IN")
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-            putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
+            putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, packageName)
         }
 
         recognizer = newRecognizer
@@ -211,7 +157,6 @@ class VoiceCaptureActivity : Activity() {
      * silently. This is the correction step, not a nicety.
      */
     private fun showEditor() {
-        releaseRecorder(deleteFile = false)
         releaseRecognizer()
 
         transcriptField.setText(transcript)
@@ -239,7 +184,7 @@ class VoiceCaptureActivity : Activity() {
             VoiceNoteBuffer.VoiceNote(
                 transactionId = transactionId,
                 transcript = finalText,
-                audioPath = audioFile?.absolutePath,
+                audioPath = null,
                 capturedAt = System.currentTimeMillis()
             )
         )
@@ -252,29 +197,18 @@ class VoiceCaptureActivity : Activity() {
         finish()
     }
 
-    private fun releaseRecorder(deleteFile: Boolean) {
-        recorder?.let { active ->
-            runCatching { active.stop() }
-            runCatching { active.release() }
-        }
-        recorder = null
-
-        if (deleteFile) {
-            audioFile?.delete()
-            audioFile = null
-        }
-    }
-
     private fun releaseRecognizer() {
         recognizer?.let { active ->
-            runCatching { active.stopListening() }
-            runCatching { active.destroy() }
+            try {
+                active.setRecognitionListener(null)
+                active.stopListening()
+                active.destroy()
+            } catch (_: Exception) {}
         }
         recognizer = null
     }
 
     override fun onDestroy() {
-        releaseRecorder(deleteFile = false)
         releaseRecognizer()
         super.onDestroy()
     }

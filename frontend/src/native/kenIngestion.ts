@@ -17,7 +17,7 @@ import {
   PermissionsAndroid,
   Platform,
 } from 'react-native';
-import { requireOptionalNativeModule, EventEmitter } from 'expo-modules-core';
+import { requireOptionalNativeModule } from 'expo-modules-core';
 import type { IngestionEvent } from '../ingestion/types';
 
 /** Shape the Kotlin module emits and stores. */
@@ -58,6 +58,12 @@ interface KenIngestionNativeModule {
     pendingCount: number,
   ): Promise<void>;
 
+  /** Start live speech recognition (STT) */
+  startSpeech(locale?: string): Promise<boolean>;
+
+  /** Stop live speech recognition */
+  stopSpeech(): Promise<boolean>;
+
   /** Dev affordance: pushes a fake event through the real native path. */
   simulateEvent(
     channel: 'sms' | 'notification',
@@ -90,7 +96,25 @@ const legacyKenModule =
 const nativeModule: KenIngestionNativeModule | null =
   expoKenModule ?? legacyKenModule ?? null;
 
-const expoEmitter = expoKenModule ? new EventEmitter(expoKenModule as any) : null;
+function getEventEmitter(): any {
+  if (expoKenModule) {
+    if (typeof (expoKenModule as any).addListener === 'function') {
+      return expoKenModule;
+    }
+    try {
+      const core = require('expo-modules-core');
+      if (core?.EventEmitter) {
+        return new core.EventEmitter(expoKenModule as any);
+      }
+    } catch (_) {}
+  }
+  if (NativeModules.KenIngestion) {
+    try {
+      return new NativeEventEmitter(NativeModules.KenIngestion);
+    } catch (_) {}
+  }
+  return null;
+}
 
 export const isNativeIngestionAvailable = (): boolean =>
   Platform.OS === 'android';
@@ -105,14 +129,13 @@ export function addIngestionListener(
     return { remove: () => undefined };
   }
 
-  if (expoEmitter) {
-    return (expoEmitter as any).addListener(INGESTION_EVENT, handler);
+  const emitter = getEventEmitter();
+  if (emitter && typeof emitter.addListener === 'function') {
+    const sub = emitter.addListener(INGESTION_EVENT, handler);
+    return { remove: () => sub?.remove?.() };
   }
 
-  const legacyEmitter = new NativeEventEmitter(
-    nativeModule as unknown as never,
-  );
-  return legacyEmitter.addListener(INGESTION_EVENT, handler);
+  return { remove: () => undefined };
 }
 
 /**
@@ -250,6 +273,57 @@ export async function simulateEvent(event: NativeIngestionEvent): Promise<void> 
     event.title ?? null,
     event.body,
   );
+}
+
+export interface SpeechCallbacks {
+  onSpeechStart?: () => void;
+  onSpeechEnd?: () => void;
+  onSpeechPartialResults?: (text: string) => void;
+  onSpeechResults?: (text: string) => void;
+  onSpeechError?: (error: string) => void;
+}
+
+export async function startNativeSpeech(locale?: string): Promise<boolean> {
+  if (!nativeModule) return false;
+  return nativeModule.startSpeech(locale);
+}
+
+export async function stopNativeSpeech(): Promise<boolean> {
+  if (!nativeModule) return false;
+  return nativeModule.stopSpeech();
+}
+
+export function addSpeechListeners(callbacks: SpeechCallbacks): { remove: () => void } {
+  const emitter = getEventEmitter();
+  if (!emitter || typeof emitter.addListener !== 'function') {
+    return { remove: () => undefined };
+  }
+
+  const subStart = emitter.addListener('KenSpeech.onSpeechStart', () => {
+    callbacks.onSpeechStart?.();
+  });
+  const subEnd = emitter.addListener('KenSpeech.onSpeechEnd', () => {
+    callbacks.onSpeechEnd?.();
+  });
+  const subPartial = emitter.addListener('KenSpeech.onSpeechPartialResults', (data: { text?: string }) => {
+    if (data?.text) callbacks.onSpeechPartialResults?.(data.text);
+  });
+  const subResults = emitter.addListener('KenSpeech.onSpeechResults', (data: { text?: string }) => {
+    if (data?.text) callbacks.onSpeechResults?.(data.text);
+  });
+  const subError = emitter.addListener('KenSpeech.onSpeechError', (data: { error?: string }) => {
+    callbacks.onSpeechError?.(data?.error ?? 'Unknown speech error');
+  });
+
+  return {
+    remove: () => {
+      subStart?.remove?.();
+      subEnd?.remove?.();
+      subPartial?.remove?.();
+      subResults?.remove?.();
+      subError?.remove?.();
+    },
+  };
 }
 
 /** Normalises a native event into the shape the parser expects. */

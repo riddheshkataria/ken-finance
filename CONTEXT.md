@@ -189,6 +189,7 @@ Client App                         │  • POST /api/categorize (Gemini Flash L
 | Area | State |
 |---|---|
 | Native Kotlin Ingestion & Android Build | **Compiled & Verified** (Gradle 9.3.1 + JDK 17, APK installed on emulator, SMS receiver tested) |
+| Native Speech-to-Text (STT) & Live Capture | **Verified on Android** (State machine: IDLE→STARTING→LISTENING→FINISHING→DESTROYING; avoids onResults drops; auto-retries transient ERROR_CLIENT (5) & BUSY (8); fallback on error 12/13; lazy EventEmitter resolver; safe permission checks; live pulsing mic UI) |
 | Money as integer paise | Verified |
 | Ingestion pipeline (parse, dedupe, reject) | Verified — 27 tests |
 | Pending-note queue | Verified — 5 tests |
